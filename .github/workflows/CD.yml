@@ -1,0 +1,182 @@
+# Tracked CD: resolve the Tracy release the manifest follows, compile the client library
+# for every runtime identifier from that same tag, then regenerate, pack, smoke-test and
+# publish.
+#
+# The natives job builds rather than downloads, unlike every other native-shipping repo in
+# the fleet: Tracy's releases publish the profiler *viewer*, and the client the package
+# ships (TracyClient) exists only as source — one translation unit upstream's own CMake
+# turns into a shared library. It runs on every CD run instead of only when the ref moved,
+# because five short builds are cheaper than the class of failure where a package is packed
+# while runtimes/ is empty and nothing says a word.
+name: CD
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip-assets-publishing:
+        description: 'Skip assets publishing'
+        required: false
+        type: boolean
+        default: false
+      force-publish:
+        description: 'Publish even when the generated code is unchanged'
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    # Monthly. tracked-cd publishes only when something actually moved.
+    - cron: '0 6 3 * *'
+
+jobs:
+  # Which Tracy release binding.yml currently follows, and whether it moved.
+  resolve:
+    if: github.event_name != 'schedule' || github.ref == 'refs/heads/main'
+    uses: EvergineTeam/Evergine.Bindings/.github/workflows/binding-resolve-upstream.yml@v1
+
+  # Compile TracyClient from the resolved tag for the five runtime identifiers. The build
+  # flags are part of the package contract (see binding.yml): TRACY_ENABLE makes the API
+  # exist, TRACY_ON_DEMAND makes an application without a viewer pay near-zero cost.
+  natives:
+    needs: resolve
+    name: natives (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: win-x64,     os: windows-latest,   cmake-args: '-A x64' }
+          - { rid: win-arm64,   os: windows-latest,   cmake-args: '-A ARM64' }
+          - { rid: linux-x64,   os: ubuntu-latest,    cmake-args: '' }
+          - { rid: linux-arm64, os: ubuntu-24.04-arm, cmake-args: '' }
+          # One universal dylib serves osx-x64 and osx-arm64 alike: the RID graph resolves
+          # both to the architecture-less `osx` folder, the same layout MuJoCo.NET uses.
+          - { rid: osx,         os: macos-latest,     cmake-args: '-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64' }
+
+    steps:
+      - name: Checkout Tracy at the resolved tag
+        uses: actions/checkout@v6
+        with:
+          repository: wolfpld/tracy
+          ref: ${{ needs.resolve.outputs.resolved_ref }}
+
+      - name: Build TracyClient
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -B build -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DTRACY_ENABLE=ON \
+            -DTRACY_ON_DEMAND=ON \
+            -DTRACY_STATIC=OFF \
+            ${{ matrix.cmake-args }}
+          cmake --build build --config Release --parallel
+
+      - name: Stage into the package layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="staged/Evergine.Bindings.Tracy/runtimes/${{ matrix.rid }}/native"
+          mkdir -p "$dest"
+
+          case "${{ matrix.rid }}" in
+            win-*) src=$(find build -name 'TracyClient.dll' | head -1) ;;
+            osx)   src=$(find build -name 'libTracyClient.dylib' | head -1) ;;
+            *)     src=$(find build -name 'libTracyClient.so*' -type f | head -1)
+                   # The NDK lesson from JoltPhysicsC: Linux toolchains keep debug info a
+                   # desktop consumer never reads. Strip it before it ships.
+                   strip --strip-unneeded "$src" ;;
+          esac
+
+          if [ -z "$src" ]; then
+            echo "::error::the build produced no TracyClient library"
+            find build -maxdepth 2 -name '*Tracy*' | sed 's/^/  /'
+            exit 1
+          fi
+
+          # Under the plain name: DllImport("TracyClient") probes libTracyClient.so, and a
+          # versioned name or dangling symlink in a NuGet package resolves to nothing.
+          case "${{ matrix.rid }}" in
+            win-*) cp "$src" "$dest/TracyClient.dll" ;;
+            osx)   cp "$src" "$dest/libTracyClient.dylib" ;;
+            *)     cp "$src" "$dest/libTracyClient.so" ;;
+          esac
+
+      # A missing or truncated library still uploads happily and would be committed and
+      # published as the absence of a platform.
+      - name: Verify the library is plausible
+        shell: bash
+        run: |
+          set -euo pipefail
+          f=$(find staged -type f)
+          size=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f")
+          echo "  $f: $size bytes"
+          if [ "$size" -lt 100000 ]; then
+            echo "::error::$f is $size bytes; expected a few hundred KB at least"
+            exit 1
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracy-natives-${{ matrix.rid }}
+          path: staged/
+          # Not `warn`: an empty artifact would be merged over the working tree as no
+          # change at all, and the publish would ship the previous libraries.
+          if-no-files-found: error
+
+  cd:
+    needs: [resolve, natives]
+    uses: EvergineTeam/Evergine.Bindings/.github/workflows/binding-tracked-cd.yml@v1
+    with:
+      generator-project: "TracyGen/TracyGen.csproj"
+      generator-name: "TracyGen"
+      binding-project: "Evergine.Bindings.Tracy/Evergine.Bindings.Tracy.csproj"
+      target-framework: "net10.0"
+      dotnet-version: "10.x"
+      nuget-version: "6.x"
+      runtime-identifier: "linux-x64"
+      build-configuration: "Release"
+      revision: ${{ github.run_number }}
+      natives-artifact-pattern: 'tracy-natives-*'
+      force-publish: ${{ inputs.force-publish || false }}
+      # Never from here. Publishing lives in its own job, behind the smoke test, so no
+      # package reaches nuget.org without having been installed and run first — the shape
+      # JoltPhysics.NET established after its cron once published unverified.
+      publish-enabled: false
+      enable-email-notifications: true
+    secrets:
+      NUGET_UPLOAD_TOKEN: ${{ secrets.EVERGINE_NUGETORG_TOKEN }}
+      WAVE_SENDGRID_TOKEN: ${{ secrets.WAVE_SENDGRID_TOKEN }}
+      EVERGINE_EMAILREPORT_LIST: ${{ secrets.EVERGINE_EMAILREPORT_LIST }}
+      EVERGINE_EMAIL: ${{ secrets.EVERGINE_EMAIL }}
+
+  # Installs the package that was just built on every identifier a runner can execute. The
+  # CD only proves the package builds — it loads nothing and calls nothing, so a package
+  # with the wrong natives, or none for an identifier, looks exactly like a good one until
+  # somebody installs it.
+  smoke:
+    needs: cd
+    if: needs.cd.outputs.packaged == 'true'
+    uses: ./.github/workflows/package-smoke.yml
+    with:
+      cd-run-id: ''
+
+  # Only now, and only if every leg passed. `needs: smoke` is the gate: a red leg means
+  # this job never starts.
+  publish:
+    needs: [cd, smoke]
+    if: needs.cd.outputs.packaged == 'true' && !inputs.skip-assets-publishing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: nuget-packages
+          path: nupkgs
+
+      - name: Publish to nuget.org
+        uses: EvergineTeam/Evergine.Bindings/.github/actions/nuget-publish@v1
+        with:
+          packages-folder: nupkgs
+          auth-token: ${{ secrets.EVERGINE_NUGETORG_TOKEN }}

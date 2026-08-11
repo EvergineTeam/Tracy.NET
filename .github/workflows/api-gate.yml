@@ -1,0 +1,25 @@
+# Measures what a pull request does to the public contract of a package that ships 79
+# entry points and five native libraries.
+#
+# The agent that opens these pull requests runs the generator and never the native build:
+# regenerating against a newer TracyC.h leaves the old libraries in place, which reads as
+# purely additive — new symbols, none removed — while every one of those new symbols is
+# missing from the binaries. native-coherence is what notices.
+#
+# auto-merge stays off while the chain is unproven — a new repository has had zero agent
+# pull requests, and the first few deserve a human. Flip it after a couple of clean
+# regenerations, the same road ImGui.Net and MuJoCo.NET walked.
+
+name: API Gate
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  api:
+    uses: EvergineTeam/Evergine.Bindings/.github/workflows/binding-api-gate.yml@v1
+    with:
+      binding-project: "Evergine.Bindings.Tracy/Evergine.Bindings.Tracy.csproj"
+      auto-merge: false
+      native-coherence: true

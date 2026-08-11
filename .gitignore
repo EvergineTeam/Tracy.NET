@@ -1,0 +1,7 @@
+**/.vs
+**/bin
+**/obj
+
+# Smoke test scratch
+SmokeTest/local-packages/
+SmokeTest/publish/

@@ -1,0 +1,55 @@
+# Binding manifest — see https://github.com/EvergineTeam/Evergine.Bindings
+toolbox: 1.25.0
+
+package:
+  id: Evergine.Bindings.Tracy
+  project: Evergine.Bindings.Tracy/Evergine.Bindings.Tracy.csproj
+  target-framework: net10.0
+  runtime-identifier: ""
+
+upstream:
+  kind: git-tree
+  language: c
+  project: https://github.com/wolfpld/tracy
+  version-from: git-release
+  release:
+    track: stable
+    current: "v0.14.0"
+    repo: wolfpld/tracy
+  # TracyC.h includes ../common/TracyApi.h and ../common/TracyFormat.h, so the vendored
+  # tree mirrors public/ far enough for those relative includes to resolve unchanged.
+  sources:
+    - repo: wolfpld/tracy
+      remote-path: public/tracy/TracyC.h
+      path: TracyGen/Headers/tracy/TracyC.h
+      format: c-header
+    - repo: wolfpld/tracy
+      remote-path: public/common/TracyApi.h
+      path: TracyGen/Headers/common/TracyApi.h
+      format: c-header
+    - repo: wolfpld/tracy
+      remote-path: public/common/TracyFormat.h
+      path: TracyGen/Headers/common/TracyFormat.h
+      format: c-header
+
+generator:
+  project: TracyGen/TracyGen.csproj
+  name: TracyGen
+  output:
+    - Evergine.Bindings.Tracy/Generated
+
+# NOTE — the native libraries are compiled, not downloaded. Tracy's releases publish the
+# profiler *viewer*; the client the package ships (TracyClient) exists only as source, one
+# translation unit, built by the CD's natives job from the same tag this manifest records.
+# Header and binaries must move as one revision, the same rule every native-shipping repo
+# in the fleet follows.
+#
+# NOTE — TRACY_ENABLE and TRACY_ON_DEMAND are part of the package contract, not build
+# trivia. Without TRACY_ENABLE, TracyC.h declares no functions at all -- the generator's
+# translation unit defines it before including, and the natives are compiled with it. With
+# TRACY_ON_DEMAND, the client records only while a viewer is connected: an application
+# running without one pays near-zero cost and does not grow memory. A consumer who needs
+# from-startup traces must connect the viewer before the code under measurement runs.
+#
+# NOTE — v1 binds the CPU client only: zones, frames, plots, messages, thread names.
+# GPU contexts, locks and memory hooks are roadmap, not omissions.

@@ -1,0 +1,122 @@
+# Runs the package on every runtime identifier a runner can execute, before it is
+# published. Each leg installs the .nupkg a CD run produced, emits a hundred frames of
+# zones, plots, messages and frame marks through the native client, and fails if any of
+# that crashes or the library does not load. TRACY_ON_DEMAND keeps the run deterministic:
+# without a viewer connected nothing touches the network.
+#
+# win-arm64 is the one leg that publishes without executing: it verifies TracyClient.dll
+# for that architecture travels in the package and survives the RID-specific publish, but
+# the runner is x64. Stated in the README rather than glossed.
+name: Package smoke test
+
+on:
+  # Called by the CD, where it stands between packing and publishing, and dispatchable by
+  # hand against any past run's artifact.
+  workflow_call:
+    inputs:
+      cd-run-id:
+        description: >-
+          The CD run whose nuget-packages artifact to test. Leave empty when calling from
+          the run that produced it, which is the normal case.
+        required: false
+        type: string
+        default: ''
+
+  workflow_dispatch:
+    inputs:
+      cd-run-id:
+        description: >-
+          The CD run whose nuget-packages artifact to test. Take it from a run started
+          with skip-assets-publishing, so nothing has been published yet.
+        required: true
+        type: string
+
+jobs:
+  desktop:
+    name: ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: win-x64,     os: windows-latest,   run: true }
+          - { rid: win-arm64,   os: windows-latest,   run: false }
+          - { rid: linux-x64,   os: ubuntu-latest,    run: true }
+          - { rid: linux-arm64, os: ubuntu-24.04-arm, run: true }
+          - { rid: osx-arm64,   os: macos-latest,     run: true }
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.x'
+
+      # The artifact the CD produced rather than one packed here, so the thing under test
+      # is what would be published, byte for byte. Two ways in, because the artifact lives
+      # in a different place depending on who is asking.
+      - name: Fetch the package from this run
+        if: inputs.cd-run-id == ''
+        uses: actions/download-artifact@v4
+        with:
+          name: nuget-packages
+          path: SmokeTest/local-packages
+
+      - name: Fetch the package from an earlier run
+        if: inputs.cd-run-id != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p SmokeTest/local-packages
+          gh run download "${{ inputs.cd-run-id }}" --repo "$GITHUB_REPOSITORY" \
+            -n nuget-packages -D SmokeTest/local-packages
+
+      - name: Work out which version is under test
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -la SmokeTest/local-packages/
+
+          pkg=$(ls SmokeTest/local-packages/*.nupkg | head -1)
+          version=$(basename "$pkg" .nupkg | sed 's/^Evergine\.Bindings\.Tracy\.//')
+
+          # Said out loud, because the failure it prevents does not look like this step's
+          # fault: an empty version reaches the project as an empty PackageReference and
+          # NuGet reports NU1015 from the restore, five legs at once, pointing at the csproj.
+          if [ -z "$version" ] || [ "$version" = "$(basename "$pkg" .nupkg)" ]; then
+            echo "::error::could not read a version out of '$(basename "$pkg")'"
+            exit 1
+          fi
+
+          echo "TRACY_VERSION=$version" >> "$GITHUB_ENV"
+          echo "testing $version on ${{ matrix.rid }}"
+
+      - name: Run the package on ${{ matrix.rid }}
+        if: matrix.run
+        shell: bash
+        working-directory: SmokeTest
+        run: |
+          set -euo pipefail
+          dotnet run -c Release -r ${{ matrix.rid }} --self-contained false \
+            -p:TracyVersion="$TRACY_VERSION"
+
+      # The cross-compiled leg: publish for the RID the runner cannot execute and assert
+      # the native library actually landed next to the executable.
+      - name: Publish for ${{ matrix.rid }} and inspect the output
+        if: ${{ !matrix.run }}
+        shell: bash
+        working-directory: SmokeTest
+        run: |
+          set -euo pipefail
+          dotnet publish -c Release -r ${{ matrix.rid }} --self-contained false \
+            -p:TracyVersion="$TRACY_VERSION" -o publish
+
+          lib="publish/TracyClient.dll"
+          if [ ! -f "$lib" ]; then
+            echo "::error::TracyClient.dll for ${{ matrix.rid }} did not reach the publish output"
+            ls publish | sed 's/^/  /'
+            exit 1
+          fi
+          echo "  $lib: $(stat -c%s "$lib") bytes"
