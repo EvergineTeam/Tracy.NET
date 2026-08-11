@@ -50,7 +50,10 @@ jobs:
           - { rid: linux-arm64, os: ubuntu-24.04-arm, cmake-args: '' }
           # One universal dylib serves osx-x64 and osx-arm64 alike: the RID graph resolves
           # both to the architecture-less `osx` folder, the same layout MuJoCo.NET uses.
-          - { rid: osx,         os: macos-latest,     cmake-args: '-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64' }
+          # The inner quotes survive into the shell line, where they keep bash from
+          # reading the semicolon as a command separator — unquoted, the configure got
+          # arm64 alone and the step then tried to run `x86_64` as a program (exit 127).
+          - { rid: osx,         os: macos-latest,     cmake-args: '-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"' }
 
     steps:
       - name: Checkout Tracy at the resolved tag
