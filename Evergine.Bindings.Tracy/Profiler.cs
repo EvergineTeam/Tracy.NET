@@ -103,7 +103,7 @@ namespace Evergine.Bindings.Tracy
 			}
 		}
 
-		private static IntPtr GetSourceLocation(string file, string member, int line, string name, uint color)
+		internal static IntPtr GetSourceLocation(string file, string member, int line, string name, uint color)
 		{
 			return sourceLocations.GetOrAdd((file, member, line, name, color), static key =>
 			{

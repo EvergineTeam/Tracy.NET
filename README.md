@@ -74,10 +74,49 @@ How each identifier is checked before a release is published, stated rather than
 What no CI leg can verify: that a viewer receives sensible data. That is a human step in
 the release process — connect Tracy v0.14 to the smoke test binary and watch zones arrive.
 
+## GPU zones
+
+The package also ships a graphics-API-agnostic GPU layer: `GpuProfilerContext` and
+`GpuZone` over Tracy's `___tracy_emit_gpu_*_serial` protocol. There is deliberately no
+per-API code — no TracyD3D12, TracyVulkan or TracyWebGPU ports — because the consumer is
+expected to own the timestamp queries, and Evergine's low-level graphics layer already
+abstracts those over every backend:
+
+| the layer needs | Evergine low-level API |
+|---|---|
+| a timestamp query pool | `Factory.CreateQueryHeap`, `QueryType.Timestamp` |
+| a timestamp per zone edge | `CommandBuffer.WriteTimestamp(heap, index)` |
+| the results after the frame | `QueryHeap.ReadData(start, count, results)` |
+| ns per GPU tick | `1e9f / graphicsContext.TimestampFrequency` |
+
+```csharp
+// startup: one raw timestamp + the tick period define the context
+var gpu = GpuProfilerContext.Create("frame GPU", TracyGpuContextType.Direct3D12,
+    initialGpuTimestamp, 1e9f / graphicsContext.TimestampFrequency, queryCapacity: 64);
+
+// record time: reserve two query ids, write real timestamps against them
+var zone = gpu.BeginZone("shadow pass");
+commandBuffer.WriteTimestamp(queryHeap, zone.BeginQueryId);
+// ... draw ...
+commandBuffer.WriteTimestamp(queryHeap, zone.EndQueryId);
+zone.End();
+
+// after readback: heap slots map 1:1 to query ids when capacities match
+gpu.SubmitTime(zone.BeginQueryId, (long)results[zone.BeginQueryId]);
+gpu.SubmitTime(zone.EndQueryId, (long)results[zone.EndQueryId]);
+```
+
+Size the query heap with the same capacity as the context and drain (`SubmitTime`) at
+least as fast as you emit — the ids are ring indices and wrap. `ReadData` returning false
+means "not ready yet": retry next frame rather than discard. Contexts are uncalibrated
+(the low-level layer exposes no CPU-GPU clock correlation), so call `TimeSync` with a
+fresh raw timestamp every few hundred frames to keep the track anchored — the same scheme
+Tracy's own OpenGL helper uses.
+
 ## Scope
 
-v1 binds the **CPU client**: zones, frames, plots, messages, thread names, app info.
-GPU contexts (D3D/Vulkan timestamp queries), locks and memory hooks are roadmap.
+v1 binds the **CPU client** (zones, frames, plots, messages, thread names, app info) plus
+the GPU emission layer above. Locks and memory hooks are roadmap.
 
 ## Development
 
