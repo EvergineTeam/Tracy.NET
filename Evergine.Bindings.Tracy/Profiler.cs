@@ -24,11 +24,13 @@ namespace Evergine.Bindings.Tracy
 		/// </summary>
 		private static readonly ConcurrentDictionary<string, IntPtr> internedStrings = new();
 
-		/// <summary>
-		/// Source locations by call site. The C macros create one static instance per source
-		/// line; this table is the run-time equivalent, so a zone hit in a loop allocates once.
-		/// </summary>
-		private static readonly ConcurrentDictionary<(string file, string member, int line, string name, uint color), IntPtr> sourceLocations = new();
+		// There is deliberately no cache of ___tracy_source_location_data structs here. The
+		// non-alloc zone path takes a pointer to one and treats it as compile-time static
+		// data; pointers into managed-owned native memory never resolve on the server side
+		// (zones arrive named "???" — observed, not theorized). Every zone therefore goes
+		// through the alloc path, where the client copies the strings during the call: the
+		// per-call-site cost is one ___tracy_alloc_srcloc_name, and the strings themselves
+		// are interned once below.
 
 		/// <summary>True while a Tracy viewer is connected to this application.</summary>
 		public static bool IsConnected => Tracy.___tracy_connected() != 0;
@@ -45,8 +47,8 @@ namespace Evergine.Bindings.Tracy
 			[CallerFilePath] string file = "",
 			[CallerMemberName] string member = "")
 		{
-			var srcloc = GetSourceLocation(file, member, line, name, color);
-			var ctx = Tracy.___tracy_emit_zone_begin((___tracy_source_location_data*)srcloc, 1);
+			var srcloc = AllocSourceLocation(file, member, line, name, color);
+			var ctx = Tracy.___tracy_emit_zone_begin_alloc(srcloc, 1);
 			return new ProfilerZone(ctx);
 		}
 
@@ -103,17 +105,36 @@ namespace Evergine.Bindings.Tracy
 			}
 		}
 
-		internal static IntPtr GetSourceLocation(string file, string member, int line, string name, uint color)
+		/// <summary>
+		/// Builds a one-shot source location through the alloc path. The returned id is
+		/// consumed by exactly one zone begin (the client frees it after use). Lengths are
+		/// cached alongside the interned bytes so this stays two dictionary hits per call.
+		/// </summary>
+		internal static ulong AllocSourceLocation(string file, string member, int line, string name, uint color)
 		{
-			return sourceLocations.GetOrAdd((file, member, line, name, color), static key =>
+			var (filePtr, fileLen) = InternWithLength(file);
+			var (memberPtr, memberLen) = InternWithLength(member);
+
+			if (name == null)
 			{
-				var data = (___tracy_source_location_data*)NativeMemory.Alloc((nuint)sizeof(___tracy_source_location_data));
-				data->name = key.name == null ? null : (byte*)Intern(key.name);
-				data->function = (byte*)Intern(key.member);
-				data->file = (byte*)Intern(key.file);
-				data->line = (uint)key.line;
-				data->color = key.color;
-				return (IntPtr)data;
+				return Tracy.___tracy_alloc_srcloc((uint)line, (byte*)filePtr, fileLen, (byte*)memberPtr, memberLen, color);
+			}
+
+			var (namePtr, nameLen) = InternWithLength(name);
+			return Tracy.___tracy_alloc_srcloc_name((uint)line, (byte*)filePtr, fileLen, (byte*)memberPtr, memberLen, (byte*)namePtr, nameLen, color);
+		}
+
+		private static readonly ConcurrentDictionary<string, (IntPtr ptr, nuint len)> internedWithLength = new();
+
+		private static (IntPtr ptr, nuint len) InternWithLength(string value)
+		{
+			return internedWithLength.GetOrAdd(value, static v =>
+			{
+				var bytes = Encoding.UTF8.GetBytes(v);
+				var ptr = (byte*)NativeMemory.Alloc((nuint)bytes.Length + 1);
+				bytes.CopyTo(new Span<byte>(ptr, bytes.Length));
+				ptr[bytes.Length] = 0;
+				return ((IntPtr)ptr, (nuint)bytes.Length);
 			});
 		}
 

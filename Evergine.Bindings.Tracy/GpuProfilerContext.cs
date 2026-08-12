@@ -23,12 +23,14 @@ namespace Evergine.Bindings.Tracy
 
 		private readonly byte context;
 		private readonly ushort queryCapacity;
+		private readonly bool[] emitted;
 		private int nextQueryId;
 
 		private GpuProfilerContext(byte context, ushort queryCapacity)
 		{
 			this.context = context;
 			this.queryCapacity = queryCapacity;
+			this.emitted = new bool[queryCapacity];
 		}
 
 		/// <summary>
@@ -97,25 +99,43 @@ namespace Evergine.Bindings.Tracy
 			[CallerFilePath] string file = "",
 			[CallerMemberName] string member = "")
 		{
+			// The client records continuously (the natives are built without
+			// TRACY_ON_DEMAND — see binding.yml for why), so zones are always emitted and
+			// history from before the viewer connects is preserved. The emitted[] array is
+			// bookkeeping, not gating: it pairs each SubmitTime with exactly one zone edge,
+			// so a stale or duplicated readback cannot send a second time for the same id.
 			ushort beginId = this.NextQueryId();
 			ushort endId = this.NextQueryId();
 
-			// The non-alloc variant stores the pointer, so the source location must be
-			// static storage — which the process-lifetime intern table is.
-			var srcloc = Profiler.GetSourceLocation(file, member, line, name, color);
+			const bool active = true;
+			this.emitted[beginId] = active;
+			this.emitted[endId] = active;
 
-			Tracy.___tracy_emit_gpu_zone_begin_serial(new ___tracy_gpu_zone_begin_data
+			if (active)
 			{
-				srcloc = (ulong)srcloc,
-				queryId = beginId,
-				context = this.context,
-			});
+				// Alloc path, same reason as CPU zones: the client copies the source
+				// location content inline instead of the server resolving a pointer that
+				// managed-owned memory can never satisfy.
+				var srcloc = Profiler.AllocSourceLocation(file, member, line, name, color);
+
+				Tracy.___tracy_emit_gpu_zone_begin_alloc_serial(new ___tracy_gpu_zone_begin_data
+				{
+					srcloc = srcloc,
+					queryId = beginId,
+					context = this.context,
+				});
+			}
 
 			return new GpuZone(this, beginId, endId);
 		}
 
 		internal void EndZone(ushort endQueryId)
 		{
+			if (!this.emitted[endQueryId])
+			{
+				return;
+			}
+
 			Tracy.___tracy_emit_gpu_zone_end_serial(new ___tracy_gpu_zone_end_data
 			{
 				queryId = endQueryId,
@@ -126,10 +146,19 @@ namespace Evergine.Bindings.Tracy
 		/// <summary>
 		/// Delivers one read-back GPU timestamp for a query id previously handed out by
 		/// <see cref="BeginZone"/>. Order does not matter to Tracy; completeness does — a
-		/// zone whose two timestamps never arrive stays open in the capture.
+		/// zone whose two timestamps never arrive stays open in the capture. Times for ids
+		/// whose zone events were not emitted (no server connected at the time) are dropped
+		/// here, so the consumer never needs to track connection state itself.
 		/// </summary>
 		public void SubmitTime(ushort queryId, long gpuTime)
 		{
+			if (!this.emitted[queryId])
+			{
+				return;
+			}
+
+			this.emitted[queryId] = false;
+
 			Tracy.___tracy_emit_gpu_time_serial(new ___tracy_gpu_time_data
 			{
 				gpuTime = gpuTime,
