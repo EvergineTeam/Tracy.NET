@@ -34,5 +34,30 @@ for (int frame = 0; frame < 100; frame++)
 	Profiler.FrameMark();
 }
 
+// The GPU layer, exercised with a synthetic clock — which is exactly what the agnostic
+// design permits: no query heap, no driver, just the emission protocol. A Custom-type
+// context with period 1.0 (one tick = one nanosecond) and a monotonically advancing
+// fake timestamp per zone edge.
+var gpu = GpuProfilerContext.Create("smoke-gpu", TracyGpuContextType.Custom,
+	initialGpuTimestamp: 0, periodNs: 1.0f, queryCapacity: 64);
+
+long fakeClock = 0;
+for (int frame = 0; frame < 100; frame++)
+{
+	var zone = gpu.BeginZone("synthetic pass");
+	long begin = fakeClock += 1_000;
+	long end = fakeClock += 500;
+	zone.End();
+
+	gpu.SubmitTime(zone.BeginQueryId, begin);
+	gpu.SubmitTime(zone.EndQueryId, end);
+
+	if (frame % 50 == 0)
+	{
+		gpu.TimeSync(fakeClock);
+	}
+}
+
+Console.WriteLine("100 synthetic GPU zones emitted through the ring. Exit 0.");
 Console.WriteLine("100 frames of zones, plots, messages and frame marks emitted. Exit 0.");
 return 0;
