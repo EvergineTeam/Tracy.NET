@@ -47,10 +47,12 @@ The package carries `TracyClient` compiled from the same upstream tag the bindin
 generated from, with two defines that are part of the contract:
 
 - `TRACY_ENABLE` — without it the API does not exist at all.
-- `TRACY_ON_DEMAND` — the client records **only while a viewer is connected**. An
-  application running without one pays near-zero cost and does not grow memory. The flip
-  side: to capture from the very first frame, connect the viewer before starting the
-  workload.
+- `TRACY_ON_DEMAND` is **off** — the client records continuously from process start, so
+  connecting the viewer at any point shows the full history. Measured on v0.14.0: the
+  on-demand DLL build drops all data a few frames after a server connects, so continuous
+  recording is not a preference here, it is the mode that works. The cost: an instrumented
+  application accumulates events in memory until a viewer connects, so ship Tracy builds
+  to the field deliberately, not by default.
 
 ## Supported Platforms
 

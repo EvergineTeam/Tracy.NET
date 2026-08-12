@@ -44,12 +44,18 @@ generator:
 # Header and binaries must move as one revision, the same rule every native-shipping repo
 # in the fleet follows.
 #
-# NOTE — TRACY_ENABLE and TRACY_ON_DEMAND are part of the package contract, not build
-# trivia. Without TRACY_ENABLE, TracyC.h declares no functions at all -- the generator's
-# translation unit defines it before including, and the natives are compiled with it. With
-# TRACY_ON_DEMAND, the client records only while a viewer is connected: an application
-# running without one pays near-zero cost and does not grow memory. A consumer who needs
-# from-startup traces must connect the viewer before the code under measurement runs.
+# NOTE — TRACY_ENABLE is part of the package contract: without it, TracyC.h declares no
+# functions at all. The generator's translation unit defines it before including, and the
+# natives are compiled with it.
 #
-# NOTE — v1 binds the CPU client only: zones, frames, plots, messages, thread names.
-# GPU contexts, locks and memory hooks are roadmap, not omissions.
+# NOTE — TRACY_ON_DEMAND is deliberately OFF, reversing the original design decision.
+# Measured on v0.14.0 (2026-08-12): a shared-library build with on-demand drops all data
+# a few frames after a server connects -- three frames and silence, against both a
+# self-built and the official tracy-capture. Continuous recording works, resolves every
+# zone, and additionally preserves history from before the viewer connects. The cost is
+# that an instrumented application accumulates events in memory until one connects.
+# Revisit if upstream fixes the on-demand DLL path.
+#
+# NOTE — the package binds the CPU client (zones, frames, plots, messages, thread names)
+# plus the graphics-API-agnostic GPU emission layer. Locks and memory hooks are roadmap,
+# not omissions.

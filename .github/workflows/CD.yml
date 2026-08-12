@@ -35,7 +35,9 @@ jobs:
 
   # Compile TracyClient from the resolved tag for the five runtime identifiers. The build
   # flags are part of the package contract (see binding.yml): TRACY_ENABLE makes the API
-  # exist, TRACY_ON_DEMAND makes an application without a viewer pay near-zero cost.
+  # exist, TRACY_ON_DEMAND stays OFF: measured on v0.14.0, a DLL build with it drops all
+  # zone data after connect (three frames and silence) against both a self-built and the
+  # official capture. Continuous recording works and keeps pre-connection history.
   natives:
     needs: resolve
     name: natives (${{ matrix.rid }})
@@ -69,7 +71,7 @@ jobs:
           cmake -B build -S . \
             -DCMAKE_BUILD_TYPE=Release \
             -DTRACY_ENABLE=ON \
-            -DTRACY_ON_DEMAND=ON \
+            -DTRACY_ON_DEMAND=OFF \
             -DTRACY_STATIC=OFF \
             ${{ matrix.cmake-args }}
           cmake --build build --config Release --parallel

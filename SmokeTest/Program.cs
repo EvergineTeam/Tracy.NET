@@ -9,6 +9,51 @@
 using System;
 using Evergine.Bindings.Tracy;
 
+// Diagnostic harness: TRACY_SMOKE_LOOP=1 keeps the process alive emitting forever so a
+// capture server can connect; TRACY_SMOKE_GPU=0 disables the GPU section to bisect which
+// half of the emission crashes a server, if one does.
+bool loop = Environment.GetEnvironmentVariable("TRACY_SMOKE_LOOP") == "1";
+bool withGpu = Environment.GetEnvironmentVariable("TRACY_SMOKE_GPU") != "0";
+
+if (loop)
+{
+	Profiler.SetThreadName("smoke-loop");
+	// TRACY_SMOKE_BASE: starting clock value, to reproduce the raw magnitudes a real GPU
+	// returns. TRACY_SMOKE_SYNC: call TimeSync every N frames (0 = never).
+	long clock = long.TryParse(Environment.GetEnvironmentVariable("TRACY_SMOKE_BASE"), out var bb) ? bb : 0;
+	int syncEvery = int.TryParse(Environment.GetEnvironmentVariable("TRACY_SMOKE_SYNC"), out var ss) ? ss : 0;
+	float period = float.TryParse(Environment.GetEnvironmentVariable("TRACY_SMOKE_PERIOD"), out var pp) ? pp : 1.0f;
+
+	GpuProfilerContext loopGpu = withGpu
+		? GpuProfilerContext.Create("smoke-gpu", TracyGpuContextType.Custom, clock, period, 64)
+		: null;
+	Console.WriteLine($"looping forever, gpu={withGpu} base={clock} sync={syncEvery} period={period}");
+	int i = 0;
+	while (true)
+	{
+		using (var z = Profiler.BeginZone("loop-frame"))
+		{
+			System.Threading.Thread.Sleep(5);
+		}
+
+		if (loopGpu != null)
+		{
+			var gz = loopGpu.BeginZone("loop-gpu");
+			long b = clock += 1_000, e = clock += 500;
+			gz.End();
+			loopGpu.SubmitTime(gz.BeginQueryId, b);
+			loopGpu.SubmitTime(gz.EndQueryId, e);
+
+			if (syncEvery > 0 && ++i % syncEvery == 0)
+			{
+				loopGpu.TimeSync(clock);
+			}
+		}
+
+		Profiler.FrameMark();
+	}
+}
+
 Profiler.SetThreadName("smoke-main");
 Profiler.AppInfo("Evergine.Bindings.Tracy package smoke test");
 
