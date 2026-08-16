@@ -1,10 +1,12 @@
 // Exercises the CPU surface of the package against the real native library. Reaching the
 // end at all means TracyClient was found in runtimes/<rid>/native/ and every P/Invoke used
-// here resolved. The client is built with TRACY_ON_DEMAND, so without a viewer connected
-// nothing touches the network and the run is deterministic in CI.
+// here resolved. The client is built *without* TRACY_ON_DEMAND (see binding.yml for the
+// measurement behind that), so it records from process start and buffers in memory; with no
+// viewer connected nothing touches the network and the run is deterministic in CI.
 //
-// What this cannot verify: that a viewer receives sensible data. That is the human check in
-// the release process — connect Tracy v0.14 to this same binary and watch zones arrive.
+// What this cannot verify: that a viewer receives sensible data — and, for the GPU section
+// below, anything at all about collecting real timestamps, since the clock here is synthetic.
+// Dx12FormsSample covers both against an actual DirectX 12 device.
 
 using System;
 using Evergine.Bindings.Tracy;

@@ -4,6 +4,17 @@
 		<TargetFramework>net10.0</TargetFramework>
 		<OutputType>Exe</OutputType>
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+		<!--
+			CI and CD always pass this explicitly; the default is for everyone else. Without it a
+			solution-wide restore fails with NU1015 ("no version specified"), which says nothing
+			about what to do. Defaulting to the version the README's local flow packs turns that
+			into "package 0.0.1-local not found", whose fix is the dotnet pack command documented
+			right there. Deliberately not a ProjectReference fallback: what this project tests is
+			the package layout, and a source reference would pass against a package shipping no
+			natives at all.
+		-->
+		<TracyVersion Condition="'$(TracyVersion)' == ''">0.0.1-local</TracyVersion>
 	</PropertyGroup>
 
 	<!--

@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="Dx12FormsSample/Dx12FormsSample.csproj" />
+  <Project Path="Evergine.Bindings.Tracy/Evergine.Bindings.Tracy.csproj" />
+  <Project Path="SmokeTest/SmokeTest.csproj" />
+  <Project Path="TracyGen/TracyGen.csproj" />
+</Solution>

@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<!--
+			net10.0-windows, not the plain net10.0 the rest of the repository uses: Evergine.Forms
+			only ships lib/net10.0-windows7.0 and declares a framework reference on
+			Microsoft.WindowsDesktop.App.WindowsForms. The binding targets plain net10.0, so
+			referencing it from here is fine — the dependency only points one way.
+		-->
+		<TargetFramework>net10.0-windows</TargetFramework>
+		<OutputType>WinExe</OutputType>
+		<UseWindowsForms>true</UseWindowsForms>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<RuntimeIdentifier>win-x64</RuntimeIdentifier>
+		<SelfContained>false</SelfContained>
+		<Nullable>disable</Nullable>
+	</PropertyGroup>
+
+	<!--
+		A ProjectReference, unlike SmokeTest: this sample exists to exercise the *source* of the
+		binding against a real GPU, not the layout of the .nupkg, and requiring a dotnet pack
+		before every run would make that loop useless.
+	-->
+	<ItemGroup>
+		<ProjectReference Include="..\Evergine.Bindings.Tracy\Evergine.Bindings.Tracy.csproj" />
+	</ItemGroup>
+
+	<!--
+		The load-bearing line. The binding project publishes its natives as
+		Content Include="runtimes\**", which through a ProjectReference lands in
+		bin\...\runtimes\win-x64\native\TracyClient.dll — a path nothing probes. Only NuGet
+		resolves runtimes/<rid>/native, through the deps.json a PackageReference produces.
+		So drop a copy next to the executable, where DllImport("TracyClient") does look;
+		without it the first Profiler call dies with DllNotFoundException.
+	-->
+	<ItemGroup>
+		<Content Include="..\Evergine.Bindings.Tracy\runtimes\win-x64\native\TracyClient.dll">
+			<Link>TracyClient.dll</Link>
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
+	</ItemGroup>
+
+	<!--
+		Pinned to 2026.5.26.921: the newest stable version that exists for all four packages at
+		once. Evergine.DirectX12 lags the others (there is no DirectX12 build of 2026.5.26.1667),
+		and mismatched Evergine versions do not compose.
+	-->
+	<ItemGroup>
+		<PackageReference Include="Evergine.Common" Version="2026.5.26.921" />
+		<PackageReference Include="Evergine.Mathematics" Version="2026.5.26.921" />
+		<PackageReference Include="Evergine.DirectX12" Version="2026.5.26.921" />
+		<PackageReference Include="Evergine.Forms" Version="2026.5.26.921" />
+	</ItemGroup>
+
+</Project>

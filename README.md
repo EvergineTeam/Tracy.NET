@@ -115,6 +115,43 @@ means "not ready yet": retry next frame rather than discard. Contexts are uncali
 fresh raw timestamp every few hundred frames to keep the track anchored — the same scheme
 Tracy's own OpenGL helper uses.
 
+## Samples
+
+`Dx12FormsSample` is a Windows Forms window drawing N cubes through a DirectX 12 swap chain on
+Evergine's low-level graphics API, instrumented end to end. It is where the GPU layer above
+meets an actual GPU — the smoke test drives it with a synthetic clock, which cannot catch a
+mistake in how timestamps are collected.
+
+```bash
+dotnet run --project Dx12FormsSample -c Release
+```
+
+The cube count is a slider because the thing being measured is how long a frame spends
+*recording* its command buffer: more cubes is more draw calls and no other change, so the
+`RecordCommands` zone has to move with it. `--cubes N` sets the starting count, which makes the
+same comparison repeatable without touching the window. Measured on one machine, per draw call:
+
+| cubes | `RecordCommands` mean | `DrawCalls` mean | per draw |
+|---|---|---|---|
+| 128 | 280 µs | 244 µs | 1.91 µs |
+| 4096 | 8.09 ms | 7.99 ms | 1.95 µs |
+
+What to check once a viewer is attached — the status bar reports the connection, so the app
+tells you without switching windows:
+
+- Zones carry their **names** (`Frame`, `Update`, `RecordCommands`, `DrawCalls`, `Submit`,
+  `Present`) and resolve to `Program.cs`. Anything arriving as `???` means the source-location
+  path broke.
+- `RecordCommands` scales with the slider, and its width agrees with the `record ms` plot and
+  the status bar. Three numbers from three paths; they have to match.
+- The **GPU** track `DX12 frame` shows one closed zone per frame. Zones left open are
+  timestamps that never arrived.
+- The trace starts before the viewer connected. That history is what `TRACY_ON_DEMAND` being
+  off buys, and losing it is a regression.
+
+The client records from process start and buffers until a viewer connects, so this sample
+accumulates memory if left running unattached.
+
 ## Scope
 
 v1 binds the **CPU client** (zones, frames, plots, messages, thread names, app info) plus
@@ -122,10 +159,34 @@ the GPU emission layer above. Locks and memory hooks are roadmap.
 
 ## Development
 
+`Tracy.NET.slnx` holds all four projects. Building it needs one step first, because `SmokeTest`
+consumes the **package** rather than the project — deliberately, since what it tests is whether
+the `.nupkg` carries a native per runtime identifier:
+
+```bash
+dotnet pack Evergine.Bindings.Tracy/Evergine.Bindings.Tracy.csproj -c Release -p:Version=0.0.1-local -o SmokeTest/local-packages
+dotnet build Tracy.NET.slnx -c Release
+```
+
+Skipping the pack fails with `NU1301` naming the missing `SmokeTest/local-packages` folder.
+Note that re-packing the same version does not always take effect: NuGet resolves from the
+global packages folder before consulting any source, so a stale `0.0.1-local` extracted there
+shadows a fresh one. Delete `~/.nuget/packages/evergine.bindings.tracy/0.0.1-local` when the
+smoke test compiles against an API that no longer matches the source.
+
+Every project also builds standalone by path — the solution is a convenience, not a
+requirement, and CI builds by explicit project path.
+
 ### Generate bindings locally
 
 ```bash
 dotnet run --project TracyGen/TracyGen.csproj
+```
+
+### Run the DirectX 12 sample against a viewer
+
+```bash
+dotnet run --project Dx12FormsSample -c Release -- --cubes 4096
 ```
 
 ### Build the binding library
