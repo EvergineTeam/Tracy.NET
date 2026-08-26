@@ -167,7 +167,7 @@ tells you without switching windows:
   path broke.
 - `RecordCommands` scales with the slider, and its width agrees with the `record ms` plot and
   the status bar. Three numbers from three paths; they have to match.
-- Every zone carries its **color** from the palette in `Program.cs`, and `RecordCommands`
+- Every zone carries its own **color**, set at the `BeginZone` call site, and `RecordCommands`
   turns red past its budget while `DrawCalls` renames itself to the cube count — the two
   reactive paths, `zone.Color()` and `zone.Name()`, both driven by the slider. An over-budget
   frame also drops a red line in the **Messages** window, at most one a second.

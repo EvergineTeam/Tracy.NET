@@ -55,25 +55,6 @@ namespace Dx12FormsSample
 		/// </summary>
 		private const double RecordBudgetMs = 4.0;
 
-		// The palette lives here rather than at the call sites so it can be read as a palette.
-		// Cold hues for the waits, warm ones for the CPU recording work this sample exists to
-		// show: that is the whole legend, and it holds in the timeline at a glance.
-		private const TracyColor FrameColor = TracyColor.SlateGray;
-		private const TracyColor GpuReadbackColor = TracyColor.MediumPurple;
-		private const TracyColor ResizeColor = TracyColor.Goldenrod;
-		private const TracyColor UpdateColor = TracyColor.MediumSeaGreen;
-		private const TracyColor RecordCommandsColor = TracyColor.Orange;
-		private const TracyColor UploadConstantsColor = TracyColor.Sienna;
-		private const TracyColor DrawCallsColor = TracyColor.Tomato;
-		private const TracyColor SubmitColor = TracyColor.Chocolate;
-		private const TracyColor WaitIdleColor = TracyColor.SteelBlue;
-		private const TracyColor PresentColor = TracyColor.CadetBlue;
-		private const TracyColor HudColor = TracyColor.DimGray;
-		private const TracyColor GpuFrameColor = TracyColor.DarkTurquoise;
-
-		/// <summary>Reserved for the over-budget states, so red never means anything else.</summary>
-		private const TracyColor OverBudgetColor = TracyColor.Crimson;
-
 		private static MainForm form;
 		private static GraphicsContext graphics;
 		private static SwapChain swapChain;
@@ -270,7 +251,7 @@ namespace Dx12FormsSample
 
 			int cubeCount = Math.Clamp(form.CubeCount, 1, MaxCubes);
 
-			using (var frameZone = Profiler.BeginZone("Frame", FrameColor))
+			using (var frameZone = Profiler.BeginZone("Frame", TracyColor.SlateGray))
 			{
 				// Attached here on purpose: Tracy's zone events form a stack, so text and value
 				// only reach this zone while it is still the innermost open one. After
@@ -278,14 +259,14 @@ namespace Dx12FormsSample
 				frameZone.Value((ulong)cubeCount);
 				frameZone.Text($"{cubeCount} cubes, gpu {gpuProfiler.LastFrameMilliseconds:F2} ms last frame");
 
-				using (Profiler.BeginZone("GpuReadback", GpuReadbackColor))
+				using (Profiler.BeginZone("GpuReadback", TracyColor.MediumPurple))
 				{
 					gpuProfiler.Drain();
 				}
 
 				if (resizePending)
 				{
-					using (Profiler.BeginZone("Resize", ResizeColor))
+					using (Profiler.BeginZone("Resize", TracyColor.Goldenrod))
 					{
 						ApplyPendingResize();
 					}
@@ -293,7 +274,7 @@ namespace Dx12FormsSample
 
 				swapChain.InitFrame();
 
-				using (Profiler.BeginZone("Update", UpdateColor))
+				using (Profiler.BeginZone("Update", TracyColor.MediumSeaGreen))
 				{
 					if (!form.PauseButton.Checked)
 					{
@@ -307,7 +288,7 @@ namespace Dx12FormsSample
 				// CPU work building the command list, with no GPU execution in it at all.
 				SectionTimer.Restart();
 				CommandBuffer commandBuffer;
-				using (var recordZone = Profiler.BeginZone("RecordCommands", RecordCommandsColor))
+				using (var recordZone = Profiler.BeginZone("RecordCommands", TracyColor.Orange))
 				{
 					commandBuffer = RecordCommands(cubeCount);
 
@@ -317,19 +298,19 @@ namespace Dx12FormsSample
 					// the same on every hit, this one belongs to the hit and says what it
 					// measured. Drag the slider and the zone goes red before any number is read.
 					recordZone.Color(SectionTimer.Elapsed.TotalMilliseconds > RecordBudgetMs
-						? OverBudgetColor
-						: RecordCommandsColor);
+						? TracyColor.Crimson
+						: TracyColor.Orange);
 				}
 
 				recordMs = SectionTimer.Elapsed.TotalMilliseconds;
 
 				SectionTimer.Restart();
-				using (Profiler.BeginZone("Submit", SubmitColor))
+				using (Profiler.BeginZone("Submit", TracyColor.Chocolate))
 				{
 					commandQueue.Submit();
 				}
 
-				using (Profiler.BeginZone("WaitIdle", WaitIdleColor))
+				using (Profiler.BeginZone("WaitIdle", TracyColor.SteelBlue))
 				{
 					SectionTimer.Restart();
 					commandQueue.WaitIdle();
@@ -338,14 +319,14 @@ namespace Dx12FormsSample
 				submitMs = SectionTimer.Elapsed.TotalMilliseconds;
 
 				SectionTimer.Restart();
-				using (Profiler.BeginZone("Present", PresentColor))
+				using (Profiler.BeginZone("Present", TracyColor.CadetBlue))
 				{
 					swapChain.Present();
 				}
 
 				presentMs = SectionTimer.Elapsed.TotalMilliseconds;
 
-				using (Profiler.BeginZone("Hud", HudColor))
+				using (Profiler.BeginZone("Hud", TracyColor.DimGray))
 				{
 					UpdateHud(elapsed);
 				}
@@ -368,7 +349,7 @@ namespace Dx12FormsSample
 				Profiler.Message(
 					$"recording over budget: {recordMs:F2} ms for {cubeCount} cubes",
 					TracyMessageSeverity.TracyMessageSeverityWarning,
-					OverBudgetColor);
+					TracyColor.Crimson);
 
 				messageTimer = 0;
 			}
@@ -388,9 +369,9 @@ namespace Dx12FormsSample
 
 			// Outside the render pass on purpose: WriteTimestamp expands to EndQuery plus
 			// ResolveQueryData, and resolving inside a render pass is not allowed.
-			GpuZone gpuFrameZone = gpuProfiler.BeginZone(commandBuffer, "GPU frame", GpuFrameColor);
+			GpuZone gpuFrameZone = gpuProfiler.BeginZone(commandBuffer, "GPU frame", TracyColor.DarkTurquoise);
 
-			using (Profiler.BeginZone("UploadConstants", UploadConstantsColor))
+			using (Profiler.BeginZone("UploadConstants", TracyColor.Sienna))
 			{
 				fixed (byte* cbPtr = cbData)
 				{
@@ -410,7 +391,7 @@ namespace Dx12FormsSample
 			commandBuffer.SetVertexBuffers(vertexBuffers);
 			commandBuffer.SetIndexBuffer(indexBuffer);
 
-			using (var drawZone = Profiler.BeginZone("DrawCalls", DrawCallsColor))
+			using (var drawZone = Profiler.BeginZone("DrawCalls", TracyColor.Tomato))
 			{
 				// Per-instance name, against the call-site name in BeginZone above. Tracy copies
 				// it, so unlike the interned source-location name it can change every frame —
