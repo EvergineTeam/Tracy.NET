@@ -47,6 +47,33 @@ namespace Dx12FormsSample
 
 		private const int InitialCubes = 512;
 
+		/// <summary>
+		/// Milliseconds of command recording past which the frame counts as over budget. Every
+		/// piece of reactive instrumentation below hangs off this one number: the
+		/// <c>RecordCommands</c> zone turns red and a message lands in the viewer's log, both
+		/// driven by dragging the slider past it.
+		/// </summary>
+		private const double RecordBudgetMs = 4.0;
+
+		// The palette lives here rather than at the call sites so it can be read as a palette.
+		// Cold hues for the waits, warm ones for the CPU recording work this sample exists to
+		// show: that is the whole legend, and it holds in the timeline at a glance.
+		private const TracyColor FrameColor = TracyColor.SlateGray;
+		private const TracyColor GpuReadbackColor = TracyColor.MediumPurple;
+		private const TracyColor ResizeColor = TracyColor.Goldenrod;
+		private const TracyColor UpdateColor = TracyColor.MediumSeaGreen;
+		private const TracyColor RecordCommandsColor = TracyColor.Orange;
+		private const TracyColor UploadConstantsColor = TracyColor.Sienna;
+		private const TracyColor DrawCallsColor = TracyColor.Tomato;
+		private const TracyColor SubmitColor = TracyColor.Chocolate;
+		private const TracyColor WaitIdleColor = TracyColor.SteelBlue;
+		private const TracyColor PresentColor = TracyColor.CadetBlue;
+		private const TracyColor HudColor = TracyColor.DimGray;
+		private const TracyColor GpuFrameColor = TracyColor.DarkTurquoise;
+
+		/// <summary>Reserved for the over-budget states, so red never means anything else.</summary>
+		private const TracyColor OverBudgetColor = TracyColor.Crimson;
+
 		private static MainForm form;
 		private static GraphicsContext graphics;
 		private static SwapChain swapChain;
@@ -78,6 +105,13 @@ namespace Dx12FormsSample
 		private static double presentMs;
 		private static double hudTimer;
 		private static int hudFrames;
+
+		/// <summary>
+		/// Seconds since the last over-budget message. Without it a sustained overrun would emit
+		/// one message per frame and bury the viewer's log, which is the fastest way to make a
+		/// useful signal useless.
+		/// </summary>
+		private static double messageTimer;
 
 		[STAThread]
 		private static void Main(string[] args)
@@ -236,16 +270,22 @@ namespace Dx12FormsSample
 
 			int cubeCount = Math.Clamp(form.CubeCount, 1, MaxCubes);
 
-			using (Profiler.BeginZone("Frame"))
+			using (var frameZone = Profiler.BeginZone("Frame", FrameColor))
 			{
-				using (Profiler.BeginZone("GpuReadback"))
+				// Attached here on purpose: Tracy's zone events form a stack, so text and value
+				// only reach this zone while it is still the innermost open one. After
+				// GpuReadback opens below, the very same calls would land on GpuReadback.
+				frameZone.Value((ulong)cubeCount);
+				frameZone.Text($"{cubeCount} cubes, gpu {gpuProfiler.LastFrameMilliseconds:F2} ms last frame");
+
+				using (Profiler.BeginZone("GpuReadback", GpuReadbackColor))
 				{
 					gpuProfiler.Drain();
 				}
 
 				if (resizePending)
 				{
-					using (Profiler.BeginZone("Resize"))
+					using (Profiler.BeginZone("Resize", ResizeColor))
 					{
 						ApplyPendingResize();
 					}
@@ -253,7 +293,7 @@ namespace Dx12FormsSample
 
 				swapChain.InitFrame();
 
-				using (Profiler.BeginZone("Update"))
+				using (Profiler.BeginZone("Update", UpdateColor))
 				{
 					if (!form.PauseButton.Checked)
 					{
@@ -267,31 +307,45 @@ namespace Dx12FormsSample
 				// CPU work building the command list, with no GPU execution in it at all.
 				SectionTimer.Restart();
 				CommandBuffer commandBuffer;
-				using (Profiler.BeginZone("RecordCommands"))
+				using (var recordZone = Profiler.BeginZone("RecordCommands", RecordCommandsColor))
 				{
 					commandBuffer = RecordCommands(cubeCount);
+
+					// The zones RecordCommands opened have all closed by now, so this one is
+					// innermost again and the recolor lands on it. This is the difference the
+					// two colors make: the one on BeginZone belongs to the call site and is
+					// the same on every hit, this one belongs to the hit and says what it
+					// measured. Drag the slider and the zone goes red before any number is read.
+					recordZone.Color(SectionTimer.Elapsed.TotalMilliseconds > RecordBudgetMs
+						? OverBudgetColor
+						: RecordCommandsColor);
 				}
 
 				recordMs = SectionTimer.Elapsed.TotalMilliseconds;
 
 				SectionTimer.Restart();
-				using (Profiler.BeginZone("Submit"))
+				using (Profiler.BeginZone("Submit", SubmitColor))
 				{
 					commandQueue.Submit();
+				}
+
+				using (Profiler.BeginZone("WaitIdle", WaitIdleColor))
+				{
+					SectionTimer.Restart();
 					commandQueue.WaitIdle();
 				}
 
 				submitMs = SectionTimer.Elapsed.TotalMilliseconds;
 
 				SectionTimer.Restart();
-				using (Profiler.BeginZone("Present"))
+				using (Profiler.BeginZone("Present", PresentColor))
 				{
 					swapChain.Present();
 				}
 
 				presentMs = SectionTimer.Elapsed.TotalMilliseconds;
 
-				using (Profiler.BeginZone("Hud"))
+				using (Profiler.BeginZone("Hud", HudColor))
 				{
 					UpdateHud(elapsed);
 				}
@@ -304,6 +358,20 @@ namespace Dx12FormsSample
 			Profiler.Plot("draw calls", cubeCount);
 			Profiler.Plot("record ms", recordMs);
 			Profiler.Plot("gpu ms", gpuProfiler.LastFrameMilliseconds);
+
+			// Colored, and at most one a second. The message log is where you go to find the
+			// moment something went wrong, so streaming a line per frame into it would cost
+			// exactly the thing it is there to provide.
+			messageTimer += elapsed;
+			if (recordMs > RecordBudgetMs && messageTimer >= 1.0)
+			{
+				Profiler.Message(
+					$"recording over budget: {recordMs:F2} ms for {cubeCount} cubes",
+					TracyMessageSeverity.TracyMessageSeverityWarning,
+					OverBudgetColor);
+
+				messageTimer = 0;
+			}
 
 			// Outside the Frame zone and after the present: this is where the frame actually ends.
 			Profiler.FrameMark();
@@ -320,9 +388,9 @@ namespace Dx12FormsSample
 
 			// Outside the render pass on purpose: WriteTimestamp expands to EndQuery plus
 			// ResolveQueryData, and resolving inside a render pass is not allowed.
-			GpuZone gpuFrameZone = gpuProfiler.BeginZone(commandBuffer, "GPU frame");
+			GpuZone gpuFrameZone = gpuProfiler.BeginZone(commandBuffer, "GPU frame", GpuFrameColor);
 
-			using (Profiler.BeginZone("UploadConstants"))
+			using (Profiler.BeginZone("UploadConstants", UploadConstantsColor))
 			{
 				fixed (byte* cbPtr = cbData)
 				{
@@ -342,8 +410,14 @@ namespace Dx12FormsSample
 			commandBuffer.SetVertexBuffers(vertexBuffers);
 			commandBuffer.SetIndexBuffer(indexBuffer);
 
-			using (Profiler.BeginZone("DrawCalls"))
+			using (var drawZone = Profiler.BeginZone("DrawCalls", DrawCallsColor))
 			{
+				// Per-instance name, against the call-site name in BeginZone above. Tracy copies
+				// it, so unlike the interned source-location name it can change every frame —
+				// which is what puts the cube count on the zone in the timeline instead of
+				// leaving it in a tooltip.
+				drawZone.Name($"DrawCalls x{cubeCount}");
+
 				for (int i = 0; i < cubeCount; i++)
 				{
 					dynamicOffsets[0] = (uint)i * CbSlotSize;

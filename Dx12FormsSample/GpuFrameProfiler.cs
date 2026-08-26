@@ -104,11 +104,12 @@ namespace Dx12FormsSample
 		public GpuZone BeginZone(
 			CommandBuffer commandBuffer,
 			string name,
+			TracyColor color = TracyColor.None,
 			[CallerLineNumber] int line = 0,
 			[CallerFilePath] string file = "",
 			[CallerMemberName] string member = "")
 		{
-			GpuZone zone = this.context.BeginZone(name, 0, line, file, member);
+			GpuZone zone = this.context.BeginZone(name, color, line, file, member);
 			commandBuffer.WriteTimestamp(this.queryHeap, zone.BeginQueryId);
 			return zone;
 		}

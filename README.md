@@ -30,16 +30,39 @@ Profiler.SetThreadName("main");
 
 while (running)
 {
-    using (var zone = Profiler.BeginZone("update"))
+    using (var zone = Profiler.BeginZone("update", TracyColor.MediumSeaGreen))
     {
         zone.Text(sceneName);
         Update();
+
+        // Per instance, against the call-site name and color above: this is how a zone says
+        // what it actually measured.
+        zone.Name($"update {entityCount} entities");
+        zone.Color(frameMs > budgetMs ? TracyColor.Crimson : TracyColor.MediumSeaGreen);
     }
 
     Profiler.Plot("entities", entityCount);
     Profiler.FrameMark();
 }
 ```
+
+### Colors
+
+`TracyColor` carries the palette from Tracy's own `TracyColor.hpp`, so a color is picked by
+name rather than by remembering a hexadecimal. It is not a closed set — any RGB value works,
+cast it: `(TracyColor)0x1a2b3c`.
+
+Two things follow from how Tracy defines colors, both of which the API preserves rather than
+papers over:
+
+- `0` means **no color was set**, not black. A zone left at `TracyColor.None` keeps the color
+  the viewer derives from its source location. Upstream declares `Black = 0x000000`, so
+  `TracyColor.Black` is a synonym of `None`; for an actually black zone use
+  `(TracyColor)0x000001`, which is what Tracy's manual recommends.
+- The color and name passed to `BeginZone` belong to the **source location**, shared by every
+  hit of that call site. `zone.Color()` and `zone.Name()` apply to **that one hit**, and are
+  only valid while the zone is the innermost open one on the thread — Tracy's zone events form
+  a stack, so anything emitted after a nested zone opened lands on the nested zone instead.
 
 ## How the native client is built
 
@@ -144,6 +167,10 @@ tells you without switching windows:
   path broke.
 - `RecordCommands` scales with the slider, and its width agrees with the `record ms` plot and
   the status bar. Three numbers from three paths; they have to match.
+- Every zone carries its **color** from the palette in `Program.cs`, and `RecordCommands`
+  turns red past its budget while `DrawCalls` renames itself to the cube count — the two
+  reactive paths, `zone.Color()` and `zone.Name()`, both driven by the slider. An over-budget
+  frame also drops a red line in the **Messages** window, at most one a second.
 - The **GPU** track `DX12 frame` shows one closed zone per frame. Zones left open are
   timestamps that never arrived.
 - The trace starts before the viewer connected. That history is what `TRACY_ON_DEMAND` being
@@ -154,8 +181,9 @@ accumulates memory if left running unattached.
 
 ## Scope
 
-v1 binds the **CPU client** (zones, frames, plots, messages, thread names, app info) plus
-the GPU emission layer above. Locks and memory hooks are roadmap.
+v1 binds the **CPU client** (zones with per-call-site and per-instance names and colors,
+frames, plots, messages, thread names, app info) plus the GPU emission layer above. Locks and
+memory hooks are roadmap.
 
 ## Development
 

@@ -39,10 +39,14 @@ namespace Evergine.Bindings.Tracy
 		/// Opens a profiling zone at the call site. Dispose the returned value to close it —
 		/// typically with <c>using var zone = Profiler.BeginZone();</c>. The source location is
 		/// captured by the compiler, interned on first use, and reused on every later hit.
+		///
+		/// <paramref name="color"/> belongs to that source location, so it is the color every
+		/// hit of this call site gets. To color one hit by what it measured, call
+		/// <see cref="ProfilerZone.Color"/> on the returned zone instead.
 		/// </summary>
 		public static ProfilerZone BeginZone(
 			string name = null,
-			uint color = 0,
+			TracyColor color = TracyColor.None,
 			[CallerLineNumber] int line = 0,
 			[CallerFilePath] string file = "",
 			[CallerMemberName] string member = "")
@@ -74,12 +78,12 @@ namespace Evergine.Bindings.Tracy
 		}
 
 		/// <summary>Sends a log message to the capture. Tracy copies the text; nothing is retained.</summary>
-		public static void Message(string text, TracyMessageSeverity severity = TracyMessageSeverity.TracyMessageSeverityInfo, int color = 0)
+		public static void Message(string text, TracyMessageSeverity severity = TracyMessageSeverity.TracyMessageSeverityInfo, TracyColor color = TracyColor.None)
 		{
 			var bytes = Encoding.UTF8.GetBytes(text);
 			fixed (byte* ptr = bytes)
 			{
-				Tracy.___tracy_emit_logString((sbyte)severity, color, 0, (nuint)bytes.Length, ptr);
+				Tracy.___tracy_emit_logString((sbyte)severity, (int)color, 0, (nuint)bytes.Length, ptr);
 			}
 		}
 
@@ -110,18 +114,18 @@ namespace Evergine.Bindings.Tracy
 		/// consumed by exactly one zone begin (the client frees it after use). Lengths are
 		/// cached alongside the interned bytes so this stays two dictionary hits per call.
 		/// </summary>
-		internal static ulong AllocSourceLocation(string file, string member, int line, string name, uint color)
+		internal static ulong AllocSourceLocation(string file, string member, int line, string name, TracyColor color)
 		{
 			var (filePtr, fileLen) = InternWithLength(file);
 			var (memberPtr, memberLen) = InternWithLength(member);
 
 			if (name == null)
 			{
-				return Tracy.___tracy_alloc_srcloc((uint)line, (byte*)filePtr, fileLen, (byte*)memberPtr, memberLen, color);
+				return Tracy.___tracy_alloc_srcloc((uint)line, (byte*)filePtr, fileLen, (byte*)memberPtr, memberLen, (uint)color);
 			}
 
 			var (namePtr, nameLen) = InternWithLength(name);
-			return Tracy.___tracy_alloc_srcloc_name((uint)line, (byte*)filePtr, fileLen, (byte*)memberPtr, memberLen, (byte*)namePtr, nameLen, color);
+			return Tracy.___tracy_alloc_srcloc_name((uint)line, (byte*)filePtr, fileLen, (byte*)memberPtr, memberLen, (byte*)namePtr, nameLen, (uint)color);
 		}
 
 		private static readonly ConcurrentDictionary<string, (IntPtr ptr, nuint len)> internedWithLength = new();

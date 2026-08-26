@@ -63,10 +63,17 @@ Console.WriteLine($"Tracy client loaded. Connected: {Profiler.IsConnected}");
 
 for (int frame = 0; frame < 100; frame++)
 {
-	using (var zone = Profiler.BeginZone("update"))
+	using (var zone = Profiler.BeginZone("update", TracyColor.MediumSeaGreen))
 	{
 		zone.Text($"frame {frame}");
 		zone.Value((ulong)frame);
+
+		// Per-instance name and color: the only place in the repository that resolves
+		// ___tracy_emit_zone_name and ___tracy_emit_zone_color in every shipped native.
+		// They go here, before the nested zone below opens, because Tracy's zone events
+		// form a stack and these only reach the innermost open zone.
+		zone.Name($"update {frame}");
+		zone.Color(frame % 10 == 0 ? TracyColor.Crimson : TracyColor.MediumSeaGreen);
 
 		// A nested zone with an anonymous (call-site) name, hitting the srcloc cache path.
 		using (Profiler.BeginZone())
@@ -76,7 +83,7 @@ for (int frame = 0; frame < 100; frame++)
 	}
 
 	Profiler.Plot("frame-index", frame);
-	Profiler.Message($"frame {frame} done");
+	Profiler.Message($"frame {frame} done", TracyMessageSeverity.TracyMessageSeverityInfo, TracyColor.SteelBlue);
 	Profiler.FrameMark("aux");
 	Profiler.FrameMark();
 }
@@ -91,7 +98,7 @@ var gpu = GpuProfilerContext.Create("smoke-gpu", TracyGpuContextType.Custom,
 long fakeClock = 0;
 for (int frame = 0; frame < 100; frame++)
 {
-	var zone = gpu.BeginZone("synthetic pass");
+	var zone = gpu.BeginZone("synthetic pass", TracyColor.DarkTurquoise);
 	long begin = fakeClock += 1_000;
 	long end = fakeClock += 500;
 	zone.End();

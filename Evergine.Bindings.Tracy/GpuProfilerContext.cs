@@ -91,10 +91,14 @@ namespace Evergine.Bindings.Tracy
 		/// GPU timestamp for <see cref="GpuZone.BeginQueryId"/> now, the one for
 		/// <see cref="GpuZone.EndQueryId"/> where the zone ends, and call
 		/// <see cref="GpuZone.End"/> after it.
+		///
+		/// There is no per-instance recolor here the way <see cref="ProfilerZone.Color"/>
+		/// offers one: a GPU zone is not on any thread's zone stack, so its color can only
+		/// travel in the source location.
 		/// </summary>
 		public GpuZone BeginZone(
 			string name = null,
-			uint color = 0,
+			TracyColor color = TracyColor.None,
 			[CallerLineNumber] int line = 0,
 			[CallerFilePath] string file = "",
 			[CallerMemberName] string member = "")
