@@ -77,6 +77,26 @@ namespace Evergine.Bindings.Tracy
 			Tracy.___tracy_emit_plot((byte*)Intern(name), value);
 		}
 
+		/// <summary>
+		/// Configures how the viewer draws a plot. Call it once, before the first
+		/// <see cref="Plot"/> of that series — the name goes through the same intern table, so
+		/// the same string reaches Tracy as the same pointer and the configuration lands on the
+		/// series it was meant for.
+		///
+		/// <paramref name="format"/> is what makes a plot readable: a byte count left at
+		/// <see cref="TracyPlotFormatEnum.TracyPlotFormatNumber"/> is drawn as a bare figure,
+		/// while <see cref="TracyPlotFormatEnum.TracyPlotFormatMemory"/> formats it as KB/MB.
+		/// </summary>
+		public static void PlotConfig(
+			string name,
+			TracyPlotFormatEnum format = TracyPlotFormatEnum.TracyPlotFormatNumber,
+			bool step = false,
+			bool fill = true,
+			TracyColor color = TracyColor.None)
+		{
+			Tracy.___tracy_emit_plot_config((byte*)Intern(name), (int)format, step ? 1 : 0, fill ? 1 : 0, (uint)color);
+		}
+
 		/// <summary>Sends a log message to the capture. Tracy copies the text; nothing is retained.</summary>
 		public static void Message(string text, TracyMessageSeverity severity = TracyMessageSeverity.TracyMessageSeverityInfo, TracyColor color = TracyColor.None)
 		{
@@ -108,6 +128,71 @@ namespace Evergine.Bindings.Tracy
 				Tracy.___tracy_emit_message_appinfo(ptr, (nuint)bytes.Length);
 			}
 		}
+
+		/// <summary>
+		/// Reports an allocation, feeding the viewer's memory graph, allocation list and memory
+		/// map. Pair it with exactly one <see cref="MemFree(IntPtr)"/>.
+		///
+		/// NOTE — this is the one part of the API that does not tolerate a mistake. Tracy
+		/// *terminates the session* on a free without a matching allocation, on the same address
+		/// allocated twice without a free in between, or on a double free; a capture that dies on
+		/// its own is nearly always one of those three. The relief Tracy grants to on-demand
+		/// clients does not apply here: these natives are built without TRACY_ON_DEMAND
+		/// (see binding.yml), so the books must balance from the first event of the process.
+		///
+		/// The pointer does not have to be a real address. Tracy accepts unique numeric ids —
+		/// which is how GPU or defragmenting allocators get tracked at all — at the cost of the
+		/// memory map, which stops meaning anything.
+		/// </summary>
+		public static void MemAlloc(IntPtr ptr, nuint size)
+		{
+			Tracy.___tracy_emit_memory_alloc((void*)ptr, size);
+		}
+
+		/// <summary>Reports a deallocation. See <see cref="MemAlloc(IntPtr, nuint)"/> for the balance rule.</summary>
+		public static void MemFree(IntPtr ptr)
+		{
+			Tracy.___tracy_emit_memory_free((void*)ptr);
+		}
+
+		/// <summary>
+		/// Reports an allocation into a separate memory pool, which the viewer lists on its own in
+		/// the memory window — the way to keep graphics-API memory, a scripting heap or an arena
+		/// from being averaged into the general one.
+		///
+		/// The pool name is interned for the lifetime of the process, like frame and plot names:
+		/// Tracy identifies a pool by the pointer, not by the characters, so the same name has to
+		/// arrive as the same pointer every time.
+		/// </summary>
+		public static void MemAlloc(IntPtr ptr, nuint size, string pool)
+		{
+			Tracy.___tracy_emit_memory_alloc_named((void*)ptr, size, (byte*)Intern(pool));
+		}
+
+		/// <summary>Reports a deallocation from a named pool. Same balance rule, per pool.</summary>
+		public static void MemFree(IntPtr ptr, string pool)
+		{
+			Tracy.___tracy_emit_memory_free_named((void*)ptr, (byte*)Intern(pool));
+		}
+
+		/// <summary>
+		/// Releases every outstanding allocation of a pool at once. This is what makes arena and
+		/// bump allocators reportable: they hand out an ever-advancing pointer and cannot free an
+		/// individual object, only reset the whole thing.
+		///
+		/// After a discard the pool starts empty, so handing out the same addresses again is
+		/// legal — without it, the second round would look like allocating a live address twice
+		/// and would end the capture.
+		/// </summary>
+		public static void MemDiscard(string pool)
+		{
+			Tracy.___tracy_emit_memory_discard((byte*)Intern(pool));
+		}
+
+		// There is deliberately no wrapper over the _callstack memory variants. They feed the
+		// viewer's allocation hot-spot tree, which Tracy builds from the *native* stack: from
+		// .NET that is JIT-compiled frames with no symbols, so the tree would cost every
+		// allocation a stack walk to show nothing anyone can act on.
 
 		/// <summary>
 		/// Builds a one-shot source location through the alloc path. The returned id is

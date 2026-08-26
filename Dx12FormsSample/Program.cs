@@ -55,6 +55,19 @@ namespace Dx12FormsSample
 		/// </summary>
 		private const double RecordBudgetMs = 4.0;
 
+		/// <summary>
+		/// Cubes per arena region. Only affects how the frame's constants are carved up, so it
+		/// is purely about what the memory window shows: one allocation per this many cubes,
+		/// instead of a single block whose size is the only thing that ever moves.
+		/// </summary>
+		private const int ArenaChunkCubes = 512;
+
+		/// <summary>
+		/// Named once so the allocation and the discard cannot drift apart — Tracy identifies a
+		/// pool by pointer, and two spellings would be two pools, one of which never gets freed.
+		/// </summary>
+		private const string ArenaPool = "frame-arena";
+
 		private static MainForm form;
 		private static GraphicsContext graphics;
 		private static SwapChain swapChain;
@@ -68,7 +81,18 @@ namespace Dx12FormsSample
 		private static uint indexCount;
 		private static GpuFrameProfiler gpuProfiler;
 
-		private static byte[] cbData;
+		/// <summary>
+		/// The frame arena: one native block reserved for <see cref="MaxCubes"/> in
+		/// <c>Load</c>, never reallocated. Each frame bumps <see cref="arenaOffset"/> through it
+		/// and releases everything at once with <c>MemDiscard</c> — which is the only way a bump
+		/// allocator can free, and the reason the reservation can stay a one-off.
+		/// </summary>
+		private static byte* arena;
+
+		private static uint arenaOffset;
+
+		/// <summary>Last value of <see cref="GC.GetTotalAllocatedBytes(bool)"/>, to plot the per-frame delta.</summary>
+		private static long lastAllocatedBytes;
 		private static Buffer[] vertexBuffers;
 		private static uint[] dynamicOffsets;
 		private static Viewport[] viewports;
@@ -148,6 +172,15 @@ namespace Dx12FormsSample
 			windowSystem.Run(Load, Draw);
 
 			gpuProfiler?.Dispose();
+
+			if (arena != null)
+			{
+				// The one free this sample reports, matching the one allocation Load made for
+				// the arena block itself.
+				Profiler.MemFree((IntPtr)arena);
+				NativeMemory.Free(arena);
+				arena = null;
+			}
 		}
 
 		private static int ParseCubeArgument(string[] args)
@@ -182,12 +215,16 @@ namespace Dx12FormsSample
 			CubeMesh.Build(out VertexPositionNormal[] vertices, out ushort[] indices);
 			indexCount = (uint)indices.Length;
 
+			uint vertexBytes = (uint)(Marshal.SizeOf<VertexPositionNormal>() * vertices.Length);
+			uint indexBytes = sizeof(ushort) * (uint)indices.Length;
+			uint constantBytes = CbSlotSize * MaxCubes;
+
 			var vbDescription = new BufferDescription(
-				(uint)(Marshal.SizeOf<VertexPositionNormal>() * vertices.Length),
+				vertexBytes,
 				BufferFlags.VertexBuffer,
 				ResourceUsage.Immutable);
 			var ibDescription = new BufferDescription(
-				sizeof(ushort) * (uint)indices.Length,
+				indexBytes,
 				BufferFlags.IndexBuffer,
 				ResourceUsage.Immutable);
 
@@ -197,10 +234,30 @@ namespace Dx12FormsSample
 			// One slot per cube, allocated once for the maximum: the slider must not be able to
 			// trigger a reallocation mid-capture, or the zone it is supposed to explain would be
 			// measuring buffer creation instead.
-			cbData = new byte[CbSlotSize * MaxCubes];
+			arena = (byte*)NativeMemory.Alloc(constantBytes);
 			var cbDescription = new BufferDescription(
-				CbSlotSize * MaxCubes, BufferFlags.ConstantBuffer, ResourceUsage.Default);
+				constantBytes, BufferFlags.ConstantBuffer, ResourceUsage.Default);
 			constantBuffer = graphics.Factory.CreateBuffer(ref cbDescription);
+
+			// The arena's own reservation, in the default pool: one real native allocation,
+			// freed once when the loop ends. The regions handed out of it every frame are a
+			// different story and live in their own pool — see ArenaAlloc.
+			Profiler.MemAlloc((IntPtr)arena, constantBytes);
+
+			// What the application owns on the device, kept apart from CPU memory. These three
+			// buffers live until the process dies, so no free is ever reported and the viewer
+			// lists them as still allocated at exit — which is the truth. Inventing a free to
+			// make the books look tidy would end the capture, not clean it.
+			const string gpuPool = "gpu";
+			Profiler.MemAlloc(vertexBuffer.NativePointer, vertexBytes, gpuPool);
+			Profiler.MemAlloc(indexBuffer.NativePointer, indexBytes, gpuPool);
+			Profiler.MemAlloc(constantBuffer.NativePointer, constantBytes, gpuPool);
+
+			// Tracy's alloc/free model cannot see the managed heap — .NET exposes no hook for
+			// it — so the GC gets plots instead. Configured before the first sample, or the
+			// viewer draws the byte counts as bare numbers.
+			Profiler.PlotConfig("gc allocated", TracyPlotFormatEnum.TracyPlotFormatMemory, color: TracyColor.MediumPurple);
+			Profiler.PlotConfig("gc gen0", TracyPlotFormatEnum.TracyPlotFormatNumber, step: true, color: TracyColor.Goldenrod);
 
 			var layoutDescription = new ResourceLayoutDescription(
 				new LayoutElementDescription(0, ResourceType.ConstantBuffer,
@@ -354,6 +411,22 @@ namespace Dx12FormsSample
 				messageTimer = 0;
 			}
 
+			// What Tracy cannot see on its own: the managed heap has no alloc/free hook, so it
+			// gets plotted. The interpolated strings this sample hands to zone.Text and
+			// zone.Name every frame are allocations, and this is where they surface.
+			long allocated = GC.GetTotalAllocatedBytes(precise: false);
+			Profiler.Plot("gc allocated", allocated - lastAllocatedBytes);
+			Profiler.Plot("gc gen0", GC.CollectionCount(0));
+			lastAllocatedBytes = allocated;
+
+			// The frame's regions go all at once, which is the only kind of free a bump
+			// allocator has. It also makes handing the same addresses out next frame legal:
+			// without the discard that would read as allocating a live address twice, and Tracy
+			// ends the session over it. Draw has no early return, so this always runs after the
+			// allocations it releases — keep it that way.
+			arenaOffset = 0;
+			Profiler.MemDiscard(ArenaPool);
+
 			// Outside the Frame zone and after the present: this is where the frame actually ends.
 			Profiler.FrameMark();
 		}
@@ -373,10 +446,9 @@ namespace Dx12FormsSample
 
 			using (Profiler.BeginZone("UploadConstants", TracyColor.Sienna))
 			{
-				fixed (byte* cbPtr = cbData)
-				{
-					commandBuffer.UpdateBufferData(constantBuffer, (IntPtr)cbPtr, (uint)cubeCount * CbSlotSize);
-				}
+				// The arena's regions are contiguous and start at its base, so the whole frame
+				// goes up in one call — and there is nothing to pin, since it was never managed.
+				commandBuffer.UpdateBufferData(constantBuffer, (IntPtr)arena, (uint)cubeCount * CbSlotSize);
 
 				commandBuffer.Barrier(new Buffer.Barrier(constantBuffer, Buffer.StateFlags.UniformBuffer));
 			}
@@ -439,9 +511,16 @@ namespace Dx12FormsSample
 			Matrix4x4 view = Matrix4x4.CreateLookAt(eye, Vector3.Zero, Vector3.Up);
 			Matrix4x4 viewProj = Matrix4x4.Multiply(view, projection);
 
-			fixed (byte* basePtr = cbData)
+			// Filled in chunks, each one its own arena region, so the slider moves the *number*
+			// of live allocations in the viewer and not just the total byte count. The chunks
+			// come out contiguous — a bump allocator reset to zero every frame — which is what
+			// lets RecordCommands upload all of them with a single pointer.
+			for (int chunkStart = 0; chunkStart < cubeCount; chunkStart += ArenaChunkCubes)
 			{
-				for (int i = 0; i < cubeCount; i++)
+				int chunkCubes = Math.Min(ArenaChunkCubes, cubeCount - chunkStart);
+				byte* basePtr = ArenaAlloc((uint)chunkCubes * CbSlotSize);
+
+				for (int i = chunkStart; i < chunkStart + chunkCubes; i++)
 				{
 					int x = i % side;
 					int y = (i / side) % side;
@@ -456,12 +535,26 @@ namespace Dx12FormsSample
 						Matrix4x4.CreateFromYawPitchRoll(animationTime + (i * 0.07f), animationTime * 0.6f, 0f) *
 						Matrix4x4.CreateTranslation(position);
 
-					var slot = (PerObject*)(basePtr + (i * CbSlotSize));
+					var slot = (PerObject*)(basePtr + ((i - chunkStart) * CbSlotSize));
 					slot->WorldViewProj = Matrix4x4.Multiply(world, viewProj);
 					slot->World = world;
 					slot->Color = HueToColor(i * 0.11f);
 				}
 			}
+		}
+
+		/// <summary>
+		/// Hands out the next region of the frame arena and reports it. No allocator runs here:
+		/// the block came from <c>Load</c> and this is pointer arithmetic, which is exactly why
+		/// the reporting has to be explicit — nothing else could see these regions.
+		/// </summary>
+		private static byte* ArenaAlloc(uint size)
+		{
+			byte* block = arena + arenaOffset;
+			arenaOffset += size;
+
+			Profiler.MemAlloc((IntPtr)block, size, ArenaPool);
+			return block;
 		}
 
 		private static Vector4 HueToColor(float hue)

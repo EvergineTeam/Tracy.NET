@@ -9,6 +9,7 @@
 // Dx12FormsSample covers both against an actual DirectX 12 device.
 
 using System;
+using System.Runtime.InteropServices;
 using Evergine.Bindings.Tracy;
 
 // Diagnostic harness: TRACY_SMOKE_LOOP=1 keeps the process alive emitting forever so a
@@ -61,6 +62,9 @@ Profiler.AppInfo("Evergine.Bindings.Tracy package smoke test");
 
 Console.WriteLine($"Tracy client loaded. Connected: {Profiler.IsConnected}");
 
+Profiler.PlotConfig("frame-index", TracyPlotFormatEnum.TracyPlotFormatNumber, color: TracyColor.SteelBlue);
+Profiler.PlotConfig("scratch bytes", TracyPlotFormatEnum.TracyPlotFormatMemory, color: TracyColor.MediumPurple);
+
 for (int frame = 0; frame < 100; frame++)
 {
 	using (var zone = Profiler.BeginZone("update", TracyColor.MediumSeaGreen))
@@ -81,6 +85,25 @@ for (int frame = 0; frame < 100; frame++)
 			System.Threading.Thread.SpinWait(1000);
 		}
 	}
+
+	// The memory surface, against real native allocations. Balance is the whole point of
+	// exercising it here: Tracy terminates a session on an unmatched free, so a capture that
+	// survives this loop is also evidence that the wrapper pairs its events correctly.
+	int scratchSize = 1024 + (frame * 16);
+	IntPtr scratch = Marshal.AllocHGlobal(scratchSize);
+	Profiler.MemAlloc(scratch, (nuint)scratchSize);
+	Profiler.Plot("scratch bytes", scratchSize);
+	Profiler.MemFree(scratch);
+	Marshal.FreeHGlobal(scratch);
+
+	// A named pool, and an arena released in one shot: allocation ids here are synthetic, which
+	// Tracy allows — it is how GPU and defragmenting allocators get tracked at all.
+	Profiler.MemAlloc((IntPtr)(0x1000 + frame), 256, "smoke-pool");
+	Profiler.MemFree((IntPtr)(0x1000 + frame), "smoke-pool");
+
+	Profiler.MemAlloc((IntPtr)0x2000, 4096, "smoke-arena");
+	Profiler.MemAlloc((IntPtr)0x3000, 4096, "smoke-arena");
+	Profiler.MemDiscard("smoke-arena");
 
 	Profiler.Plot("frame-index", frame);
 	Profiler.Message($"frame {frame} done", TracyMessageSeverity.TracyMessageSeverityInfo, TracyColor.SteelBlue);

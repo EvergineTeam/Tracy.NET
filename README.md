@@ -46,6 +46,28 @@ while (running)
 }
 ```
 
+### Memory
+
+`Profiler.MemAlloc(ptr, size)` and `Profiler.MemFree(ptr)` feed the viewer's memory graph,
+allocation list and memory map. Both take an `IntPtr`, so no `unsafe` is needed at the call
+site, and the value does not have to be a real address — Tracy accepts unique numeric ids,
+which is how GPU or defragmenting allocators get tracked at all (the memory map is what you
+give up).
+
+Overloads taking a pool name track a separate pool, listed on its own in the memory window —
+graphics-API memory apart from the general heap. `Profiler.MemDiscard(pool)` releases a whole
+pool at once, which is the only kind of free an arena or bump allocator has.
+
+```csharp
+Profiler.MemAlloc(buffer.NativePointer, sizeInBytes, "gpu");
+```
+
+> **The books must balance.** Tracy *terminates the session* on a free without a matching
+> allocation, on the same address allocated twice without a free in between, or on a double
+> free. The relief Tracy grants to on-demand clients does not apply here — this package's
+> natives are built without `TRACY_ON_DEMAND`, so the accounting must hold from the first event
+> of the process. A capture that dies on its own is nearly always one of those three.
+
 ### Colors
 
 `TracyColor` carries the palette from Tracy's own `TracyColor.hpp`, so a color is picked by
@@ -182,8 +204,8 @@ accumulates memory if left running unattached.
 ## Scope
 
 v1 binds the **CPU client** (zones with per-call-site and per-instance names and colors,
-frames, plots, messages, thread names, app info) plus the GPU emission layer above. Locks and
-memory hooks are roadmap.
+frames, plots, messages, thread names, app info, memory) plus the GPU emission layer above.
+Locks are roadmap.
 
 ## Development
 
