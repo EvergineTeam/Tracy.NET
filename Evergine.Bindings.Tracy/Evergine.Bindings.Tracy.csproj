@@ -8,6 +8,7 @@
 		<Company>Plain Concepts</Company>
 		<Description>Low-level bindings for the Tracy profiler (CPU client) used in Evergine</Description>
 		<RepositoryUrl>https://github.com/EvergineTeam/Tracy.NET</RepositoryUrl>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
 		<PackageIcon>icon.png</PackageIcon>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
 	</PropertyGroup>
