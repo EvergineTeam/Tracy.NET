@@ -162,13 +162,13 @@ Tracy's own OpenGL helper uses.
 
 ## Samples
 
-`Dx12FormsSample` is a Windows Forms window drawing N cubes through a DirectX 12 swap chain on
+`LowLevelFormsSample` is a Windows Forms window drawing N cubes through a DirectX 12 swap chain on
 Evergine's low-level graphics API, instrumented end to end. It is where the GPU layer above
 meets an actual GPU — the smoke test drives it with a synthetic clock, which cannot catch a
 mistake in how timestamps are collected.
 
 ```bash
-dotnet run --project Dx12FormsSample -c Release
+dotnet run --project LowLevelFormsSample -c Release
 ```
 
 The cube count is a slider because the thing being measured is how long a frame spends
@@ -236,7 +236,7 @@ dotnet run --project TracyGen/TracyGen.csproj
 ### Run the DirectX 12 sample against a viewer
 
 ```bash
-dotnet run --project Dx12FormsSample -c Release -- --cubes 4096
+dotnet run --project LowLevelFormsSample -c Release -- --cubes 4096
 ```
 
 ### Build the binding library

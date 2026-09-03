@@ -3,7 +3,7 @@ using System.Drawing;
 using System.Windows.Forms;
 using Evergine.Forms;
 
-namespace Dx12FormsSample
+namespace LowLevelFormsSample
 {
 	/// <summary>
 	/// A plain Windows Forms window hosting an <see cref="EvergineControl"/>: DirectX 12 renders

@@ -1,4 +1,4 @@
-namespace Dx12FormsSample
+namespace LowLevelFormsSample
 {
 	/// <summary>
 	/// The scene is deliberately as cheap as a scene can be while still being a real draw call:

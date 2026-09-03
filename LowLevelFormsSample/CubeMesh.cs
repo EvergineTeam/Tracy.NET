@@ -1,7 +1,7 @@
 using Evergine.Common.Graphics.VertexFormats;
 using Evergine.Mathematics;
 
-namespace Dx12FormsSample
+namespace LowLevelFormsSample
 {
 	/// <summary>
 	/// A unit cube built in code: 24 vertices (four per face, so each face carries its own flat

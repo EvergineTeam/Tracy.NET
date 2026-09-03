@@ -14,7 +14,7 @@ using Rectangle = Evergine.Mathematics.Rectangle;
 using Vector3 = Evergine.Mathematics.Vector3;
 using Vector4 = Evergine.Mathematics.Vector4;
 
-namespace Dx12FormsSample
+namespace LowLevelFormsSample
 {
 	/// <summary>
 	/// A Windows Forms window drawing N cubes through a DirectX 12 swap chain on Evergine's

@@ -4,7 +4,7 @@ using System.Runtime.CompilerServices;
 using Evergine.Bindings.Tracy;
 using Evergine.Common.Graphics;
 
-namespace Dx12FormsSample
+namespace LowLevelFormsSample
 {
 	/// <summary>
 	/// Puts real GPU timestamps behind <see cref="GpuProfilerContext"/>. The binding owns the

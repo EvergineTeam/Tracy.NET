@@ -6,7 +6,7 @@
 //
 // What this cannot verify: that a viewer receives sensible data — and, for the GPU section
 // below, anything at all about collecting real timestamps, since the clock here is synthetic.
-// Dx12FormsSample covers both against an actual DirectX 12 device.
+// LowLevelFormsSample covers both against an actual DirectX 12 device.
 
 using System;
 using System.Runtime.InteropServices;
