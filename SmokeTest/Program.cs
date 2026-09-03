@@ -136,5 +136,58 @@ for (int frame = 0; frame < 100; frame++)
 }
 
 Console.WriteLine("100 synthetic GPU zones emitted through the ring. Exit 0.");
+
+// The calibrated flavour of the same protocol: the context is anchored on a GPU/CPU pair
+// sampled "at the same instant" — here the fake clock against Stopwatch — and re-anchored
+// with Calibrate, whose CPU delta comes from real Stopwatch ticks scaled to nanoseconds. The
+// first zone pair has to be (0,1): pairs aligned to even ids never straddle the ring wrap.
+long calibratedClock = 1_000_000;
+long previousCpuTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+var calibrated = GpuProfilerContext.Create("smoke-gpu-calibrated", TracyGpuContextType.Custom,
+	initialGpuTimestamp: calibratedClock, periodNs: 1.0f, queryCapacity: 64, calibrated: true);
+
+var firstZone = calibrated.BeginZone("first pair");
+if (firstZone.BeginQueryId != 0 || firstZone.EndQueryId != 1)
+{
+	Console.Error.WriteLine($"first zone pair is ({firstZone.BeginQueryId},{firstZone.EndQueryId}), expected (0,1)");
+	return 1;
+}
+
+firstZone.End();
+calibrated.SubmitTime(firstZone.BeginQueryId, calibratedClock += 1_000);
+calibrated.SubmitTime(firstZone.EndQueryId, calibratedClock += 500);
+
+for (int frame = 0; frame < 20; frame++)
+{
+	var zone = calibrated.BeginZone("calibrated pass", TracyColor.MediumSeaGreen);
+	long begin = calibratedClock += 1_000;
+	long end = calibratedClock += 500;
+	zone.End();
+	calibrated.SubmitTime(zone.BeginQueryId, begin);
+	calibrated.SubmitTime(zone.EndQueryId, end);
+
+	if (frame % 5 == 4)
+	{
+		long now = System.Diagnostics.Stopwatch.GetTimestamp();
+		long cpuDeltaNs = (long)((now - previousCpuTicks) * (1e9 / System.Diagnostics.Stopwatch.Frequency));
+		previousCpuTicks = now;
+		calibrated.Calibrate(calibratedClock, cpuDeltaNs);
+	}
+}
+
+// TimeSync is the uncalibrated re-anchor and Calibrate the calibrated one; each is refused or
+// ignored on the other kind of context so a consumer cannot mix the two schemes by accident.
+calibrated.TimeSync(calibratedClock);
+try
+{
+	gpu.Calibrate(fakeClock, 1_000_000);
+	Console.Error.WriteLine("Calibrate on an uncalibrated context did not throw");
+	return 1;
+}
+catch (InvalidOperationException)
+{
+}
+
+Console.WriteLine("21 calibrated GPU zones and 4 calibrations emitted. Exit 0.");
 Console.WriteLine("100 frames of zones, plots, messages and frame marks emitted. Exit 0.");
 return 0;
