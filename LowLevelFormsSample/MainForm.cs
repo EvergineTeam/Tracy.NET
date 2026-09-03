@@ -6,8 +6,8 @@ using Evergine.Forms;
 namespace LowLevelFormsSample
 {
 	/// <summary>
-	/// A plain Windows Forms window hosting an <see cref="EvergineControl"/>: DirectX 12 renders
-	/// into that control's HWND while the rest of the window stays ordinary WinForms. The two
+	/// A plain Windows Forms window hosting an <see cref="EvergineControl"/>: DirectX 12 or Vulkan
+	/// renders into that control's HWND while the rest of the window stays ordinary WinForms. The two
 	/// controls that matter for profiling are the cube-count slider — moving it changes how many
 	/// draw calls the frame records, which is the whole point of the sample — and the status bar,
 	/// which reports whether a Tracy viewer is attached without having to look at the viewer.
@@ -25,7 +25,7 @@ namespace LowLevelFormsSample
 		{
 			this.cubeCount = initialCubes;
 
-			this.Text = "Tracy.NET - DirectX 12 command recording";
+			this.Text = "Tracy.NET - command recording";
 			this.StartPosition = FormStartPosition.CenterScreen;
 			this.ClientSize = new Size(renderWidth, renderHeight + 60);
 			this.MinimumSize = new Size(480, 360);
@@ -112,11 +112,20 @@ namespace LowLevelFormsSample
 		/// <summary>Number of discrete positions on the logarithmic slider.</summary>
 		private const int SliderSteps = 100;
 
-		public void SetTimings(double recordMs, double submitMs, double presentMs, double gpuMs, double fps)
+		public void SetTimings(double recordMs, double blockedMs, double presentMs, double gpuMs, double fps)
 		{
 			this.timingsLabel.Text = string.Create(
 				System.Globalization.CultureInfo.InvariantCulture,
-				$"record {recordMs,7:F3} ms   submit {submitMs,6:F2} ms   present {presentMs,5:F2} ms   gpu {gpuMs,6:F2} ms   |   {fps,5:F1} fps");
+				$"record {recordMs,7:F3} ms   fence wait {blockedMs,6:F2} ms   present {presentMs,5:F2} ms   gpu {gpuMs,6:F2} ms   |   {fps,5:F1} fps");
+		}
+
+		/// <summary>
+		/// Names the backend and the alignment scheme in the title, so a capture can be told apart
+		/// from the window it came from without opening the viewer's context tooltip.
+		/// </summary>
+		public void SetBackend(string backendName, bool calibrated)
+		{
+			this.Text = $"Tracy.NET - {backendName} command recording ({(calibrated ? "calibrated" : "uncalibrated")} GPU track)";
 		}
 
 		public void SetTracyConnected(bool connected)

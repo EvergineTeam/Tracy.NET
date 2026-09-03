@@ -7,6 +7,7 @@ using Evergine.Common.Graphics;
 using Evergine.Common.Graphics.VertexFormats;
 using Evergine.DirectX12;
 using Evergine.Forms;
+using Evergine.Vulkan;
 using Buffer = Evergine.Common.Graphics.Buffer;
 using Color = Evergine.Common.Graphics.Color;
 using Matrix4x4 = Evergine.Mathematics.Matrix4x4;
@@ -17,14 +18,21 @@ using Vector4 = Evergine.Mathematics.Vector4;
 namespace LowLevelFormsSample
 {
 	/// <summary>
-	/// A Windows Forms window drawing N cubes through a DirectX 12 swap chain on Evergine's
-	/// low-level graphics API, instrumented with Tracy from end to end.
+	/// A Windows Forms window drawing N cubes through a DirectX 12 or Vulkan swap chain on
+	/// Evergine's low-level graphics API, with three frames in flight, instrumented with Tracy
+	/// from end to end.
 	///
 	/// The question the sample answers is how long a frame spends <em>recording</em> its command
 	/// buffer, which is why the cube count is a slider rather than a constant: dragging it changes
 	/// nothing about the work per cube and everything about how many draw calls the frame issues,
 	/// so the <c>RecordCommands</c> zone in the viewer has to move with it. If it does not, the
 	/// capture is not measuring what it claims to.
+	///
+	/// The second question is whether the GPU track sits where it should against the CPU zones.
+	/// With frames in flight and vsync off the GPU runs a frame or more behind the CPU, so a
+	/// misaligned track is easy to mistake for a correct one; <see cref="GpuFrameProfiler"/>
+	/// calibrates both clocks where the backend allows it, and <c>--no-calibration</c> shows what
+	/// the uncalibrated scheme looks like on the same machine.
 	///
 	/// It is also the only place in this repository where the GPU layer meets a real GPU: the
 	/// smoke test drives <see cref="GpuProfilerContext"/> with a synthetic clock, no query heap
@@ -34,6 +42,13 @@ namespace LowLevelFormsSample
 	{
 		private const int RenderWidth = 1280;
 		private const int RenderHeight = 720;
+
+		/// <summary>
+		/// Frames the CPU may record ahead of the GPU. Each has its own fence and its own copy of
+		/// the per-frame constants: the GPU may still be reading frame N's buffer while the CPU
+		/// records frame N+1, so sharing one would race.
+		/// </summary>
+		private const int FramesInFlight = 3;
 
 		/// <summary>Per-cube constant slot. Dynamic offsets have to be 256-byte aligned.</summary>
 		private const uint CbSlotSize = 256;
@@ -69,15 +84,18 @@ namespace LowLevelFormsSample
 		private const string ArenaPool = "frame-arena";
 
 		private static MainForm form;
+		private static Backend backend;
+		private static bool allowCalibration;
 		private static GraphicsContext graphics;
 		private static SwapChain swapChain;
 		private static FrameBuffer frameBuffer;
 		private static CommandQueue commandQueue;
 		private static GraphicsPipelineState pipeline;
-		private static ResourceSet resourceSet;
+		private static ResourceSet[] resourceSets;
 		private static Buffer vertexBuffer;
 		private static Buffer indexBuffer;
-		private static Buffer constantBuffer;
+		private static Buffer[] constantBuffers;
+		private static Fence[] frameFences;
 		private static uint indexCount;
 		private static GpuFrameProfiler gpuProfiler;
 
@@ -85,7 +103,9 @@ namespace LowLevelFormsSample
 		/// The frame arena: one native block reserved for <see cref="MaxCubes"/> in
 		/// <c>Load</c>, never reallocated. Each frame bumps <see cref="arenaOffset"/> through it
 		/// and releases everything at once with <c>MemDiscard</c> — which is the only way a bump
-		/// allocator can free, and the reason the reservation can stay a one-off.
+		/// allocator can free, and the reason the reservation can stay a one-off. The command
+		/// buffer copies it into the frame's constant buffer at record time, so reusing it the
+		/// next frame is safe even with frames in flight.
 		/// </summary>
 		private static byte* arena;
 
@@ -103,10 +123,10 @@ namespace LowLevelFormsSample
 		private static readonly Stopwatch SectionTimer = new Stopwatch();
 		private static bool resizePending;
 		private static float animationTime;
-		private static double lastFrameSeconds;
+		private static long frameIndex;
 
 		private static double recordMs;
-		private static double submitMs;
+		private static double blockedMs;
 		private static double presentMs;
 		private static double hudTimer;
 		private static int hudFrames;
@@ -118,13 +138,23 @@ namespace LowLevelFormsSample
 		/// </summary>
 		private static double messageTimer;
 
+		private enum Backend
+		{
+			DirectX12,
+			Vulkan,
+		}
+
 		[STAThread]
 		private static void Main(string[] args)
 		{
 			// --cubes N only sets where the slider starts. Dragging it is the interactive way to
 			// watch RecordCommands move; passing a count is the repeatable way, so two runs can be
-			// captured and compared without anyone touching the window.
+			// captured and compared without anyone touching the window. --backend picks the API
+			// and --no-calibration the alignment scheme, for the same reason: one capture per
+			// configuration, nothing touched in between.
 			int initialCubes = ParseCubeArgument(args);
+			backend = ParseBackendArgument(args);
+			allowCalibration = Array.IndexOf(args, "--no-calibration") < 0;
 
 			// Before any window exists, or the swap chain is sized in virtual pixels and Windows
 			// upscales the result.
@@ -140,8 +170,15 @@ namespace LowLevelFormsSample
 			form.CreateControl();
 			IntPtr renderHandle = form.RenderControl.Handle;
 
-			graphics = new DX12GraphicsContext();
-			graphics.CreateDevice(new ValidationLayer(ValidationLayer.NotifyMethod.Trace));
+			// Both backends take the same Win32 surface; Vulkan builds a VkSurfaceKHR from the HWND.
+			graphics = backend == Backend.Vulkan
+				? new VKGraphicsContext()
+				: new DX12GraphicsContext();
+
+			// Off unless asked for: the debug layers validate every call and multiply the recording
+			// cost the sample exists to measure. --validation turns them on to chase an actual bug.
+			bool validation = Array.IndexOf(args, "--validation") >= 0;
+			graphics.CreateDevice(validation ? new ValidationLayer(ValidationLayer.NotifyMethod.Trace) : null);
 
 			var swapChainDescription = new SwapChainDescription()
 			{
@@ -161,7 +198,8 @@ namespace LowLevelFormsSample
 
 			// Deliberately off. With vsync the frame is pinned to the refresh rate and every
 			// change in recording cost is absorbed by the wait in Present, which is precisely the
-			// signal this sample exists to show.
+			// signal this sample exists to show — and the GPU track's alignment is only put to the
+			// test when the GPU is allowed to run as far behind the CPU as the fences let it.
 			swapChain.VerticalSync = false;
 
 			form.RenderControl.ClientSizeChanged += (s, e) => resizePending = true;
@@ -171,7 +209,18 @@ namespace LowLevelFormsSample
 			windowSystem.RegisterLoopThreadControl(form);
 			windowSystem.Run(Load, Draw);
 
+			// Frames may still be in flight when the window closes; nothing below may be released
+			// while the GPU can still touch it.
+			commandQueue?.WaitIdle();
 			gpuProfiler?.Dispose();
+
+			if (frameFences != null)
+			{
+				foreach (Fence fence in frameFences)
+				{
+					fence.Dispose();
+				}
+			}
 
 			if (arena != null)
 			{
@@ -196,17 +245,41 @@ namespace LowLevelFormsSample
 			return InitialCubes;
 		}
 
+		private static Backend ParseBackendArgument(string[] args)
+		{
+			for (int i = 0; i < args.Length - 1; i++)
+			{
+				if (args[i] == "--backend")
+				{
+					switch (args[i + 1].ToLowerInvariant())
+					{
+						case "vulkan":
+						case "vk":
+							return Backend.Vulkan;
+						case "dx12":
+						case "directx12":
+						case "d3d12":
+							return Backend.DirectX12;
+						default:
+							throw new ArgumentException($"Unknown backend '{args[i + 1]}'. Use --backend dx12 or --backend vulkan.");
+					}
+				}
+			}
+
+			return Backend.DirectX12;
+		}
+
 		private static void Load()
 		{
 			// RenderLoop.Run drives the callback from the thread that called it, which is the STA
 			// UI thread — so this is the thread the whole capture is about.
 			Profiler.SetThreadName("render (UI)");
-			Profiler.AppInfo("Tracy.NET DirectX 12 + Windows Forms sample");
+			Profiler.AppInfo($"Tracy.NET {backend} + Windows Forms sample");
 
 			frameBuffer = swapChain.FrameBuffer;
 
-			var vsBytes = graphics.ShaderCompile(Shaders.Hlsl, "VS", ShaderStages.Vertex).ByteCode;
-			var psBytes = graphics.ShaderCompile(Shaders.Hlsl, "PS", ShaderStages.Pixel).ByteCode;
+			var vsBytes = ShaderCompiler.Compile(graphics, Shaders.Hlsl, "VS", ShaderStages.Vertex);
+			var psBytes = ShaderCompiler.Compile(graphics, Shaders.Hlsl, "PS", ShaderStages.Pixel);
 			var vsDescription = new ShaderDescription(ShaderStages.Vertex, "VS", vsBytes);
 			var psDescription = new ShaderDescription(ShaderStages.Pixel, "PS", psBytes);
 			var vertexShader = graphics.Factory.CreateShader(ref vsDescription);
@@ -235,37 +308,49 @@ namespace LowLevelFormsSample
 			// trigger a reallocation mid-capture, or the zone it is supposed to explain would be
 			// measuring buffer creation instead.
 			arena = (byte*)NativeMemory.Alloc(constantBytes);
-			var cbDescription = new BufferDescription(
-				constantBytes, BufferFlags.ConstantBuffer, ResourceUsage.Default);
-			constantBuffer = graphics.Factory.CreateBuffer(ref cbDescription);
 
 			// The arena's own reservation, in the default pool: one real native allocation,
 			// freed once when the loop ends. The regions handed out of it every frame are a
 			// different story and live in their own pool — see ArenaAlloc.
 			Profiler.MemAlloc((IntPtr)arena, constantBytes);
 
-			// What the application owns on the device, kept apart from CPU memory. These three
-			// buffers live until the process dies, so no free is ever reported and the viewer
-			// lists them as still allocated at exit — which is the truth. Inventing a free to
-			// make the books look tidy would end the capture, not clean it.
+			// What the application owns on the device, kept apart from CPU memory. These buffers
+			// live until the process dies, so no free is ever reported and the viewer lists them
+			// as still allocated at exit — which is the truth. Inventing a free to make the books
+			// look tidy would end the capture, not clean it.
 			const string gpuPool = "gpu";
 			Profiler.MemAlloc(vertexBuffer.NativePointer, vertexBytes, gpuPool);
 			Profiler.MemAlloc(indexBuffer.NativePointer, indexBytes, gpuPool);
-			Profiler.MemAlloc(constantBuffer.NativePointer, constantBytes, gpuPool);
-
-			// Tracy's alloc/free model cannot see the managed heap — .NET exposes no hook for
-			// it — so the GC gets plots instead. Configured before the first sample, or the
-			// viewer draws the byte counts as bare numbers.
-			Profiler.PlotConfig("gc allocated", TracyPlotFormatEnum.TracyPlotFormatMemory, color: TracyColor.MediumPurple);
-			Profiler.PlotConfig("gc gen0", TracyPlotFormatEnum.TracyPlotFormatNumber, step: true, color: TracyColor.Goldenrod);
 
 			var layoutDescription = new ResourceLayoutDescription(
 				new LayoutElementDescription(0, ResourceType.ConstantBuffer,
 					ShaderStages.Vertex | ShaderStages.Pixel, allowDynamicOffset: true, size: CbSlotSize));
 			var resourceLayout = graphics.Factory.CreateResourceLayout(ref layoutDescription);
 
-			var resourceSetDescription = new ResourceSetDescription(resourceLayout, constantBuffer);
-			resourceSet = graphics.Factory.CreateResourceSet(ref resourceSetDescription);
+			// One constant buffer and one resource set per frame in flight — see FramesInFlight.
+			constantBuffers = new Buffer[FramesInFlight];
+			resourceSets = new ResourceSet[FramesInFlight];
+			frameFences = new Fence[FramesInFlight];
+			for (int i = 0; i < FramesInFlight; i++)
+			{
+				var cbDescription = new BufferDescription(
+					constantBytes, BufferFlags.ConstantBuffer, ResourceUsage.Default);
+				constantBuffers[i] = graphics.Factory.CreateBuffer(ref cbDescription);
+				constantBuffers[i].Name = $"Constants {i}";
+				Profiler.MemAlloc(constantBuffers[i].NativePointer, constantBytes, gpuPool);
+
+				var resourceSetDescription = new ResourceSetDescription(resourceLayout, constantBuffers[i]);
+				resourceSets[i] = graphics.Factory.CreateResourceSet(ref resourceSetDescription);
+
+				frameFences[i] = graphics.Factory.CreateFence();
+				frameFences[i].Name = $"Frame fence {i}";
+			}
+
+			// Tracy's alloc/free model cannot see the managed heap — .NET exposes no hook for
+			// it — so the GC gets plots instead. Configured before the first sample, or the
+			// viewer draws the byte counts as bare numbers.
+			Profiler.PlotConfig("gc allocated", TracyPlotFormatEnum.TracyPlotFormatMemory, color: TracyColor.MediumPurple);
+			Profiler.PlotConfig("gc gen0", TracyPlotFormatEnum.TracyPlotFormatNumber, step: true, color: TracyColor.Goldenrod);
 
 			var pipelineDescription = new GraphicsPipelineDescription()
 			{
@@ -289,7 +374,16 @@ namespace LowLevelFormsSample
 			pipeline = graphics.Factory.CreateGraphicsPipeline(ref pipelineDescription);
 			commandQueue = graphics.Factory.CreateCommandQueue();
 
-			gpuProfiler = GpuFrameProfiler.Create(graphics, commandQueue, "DX12 frame");
+			var contextType = backend == Backend.Vulkan ? TracyGpuContextType.Vulkan : TracyGpuContextType.Direct3D12;
+			gpuProfiler = GpuFrameProfiler.Create(graphics, commandQueue, $"{backend} frame", contextType, allowCalibration);
+			form.SetBackend(backend.ToString(), gpuProfiler.IsCalibrated);
+
+			Profiler.Message(
+				gpuProfiler.IsCalibrated
+					? $"{backend}: GPU track calibrated through CommandQueue.GetClockCalibration (startup anchor window was {gpuProfiler.AnchorErrorMilliseconds:F3} ms)"
+					: $"{backend}: GPU track uncalibrated, anchored once inside a {gpuProfiler.AnchorErrorMilliseconds:F3} ms Submit/WaitIdle window",
+				TracyMessageSeverity.TracyMessageSeverityInfo,
+				gpuProfiler.IsCalibrated ? TracyColor.MediumSeaGreen : TracyColor.Goldenrod);
 
 			vertexBuffers = new[] { vertexBuffer };
 			dynamicOffsets = new uint[1];
@@ -304,21 +398,36 @@ namespace LowLevelFormsSample
 		{
 			double elapsed = Clock.Elapsed.TotalSeconds;
 			Clock.Restart();
-			lastFrameSeconds = elapsed;
 
 			int cubeCount = Math.Clamp(form.CubeCount, 1, MaxCubes);
+			int slot = (int)(frameIndex % FramesInFlight);
+			Fence frameFence = frameFences[slot];
 
 			using (var frameZone = Profiler.BeginZone("Frame", TracyColor.SlateGray))
 			{
 				// Attached here on purpose: Tracy's zone events form a stack, so text and value
 				// only reach this zone while it is still the innermost open one. After
-				// GpuReadback opens below, the very same calls would land on GpuReadback.
+				// FenceWait opens below, the very same calls would land on FenceWait.
 				frameZone.Value((ulong)cubeCount);
 				frameZone.Text($"{cubeCount} cubes, gpu {gpuProfiler.LastFrameMilliseconds:F2} ms last frame");
 
+				// The fence of this slot was signaled by the frame that used it FramesInFlight
+				// frames ago. Waiting on it is the only place the CPU blocks on the GPU: with
+				// vsync off this is where a GPU-bound frame shows its cost.
+				SectionTimer.Restart();
+				using (Profiler.BeginZone("FenceWait", TracyColor.SteelBlue))
+				{
+					frameFence.Wait();
+					frameFence.Reset();
+				}
+
+				blockedMs = SectionTimer.Elapsed.TotalMilliseconds;
+
+				// Everything up to and including frame (frameIndex - FramesInFlight) is now done
+				// on the GPU, so its timestamps can be read without stalling.
 				using (Profiler.BeginZone("GpuReadback", TracyColor.MediumPurple))
 				{
-					gpuProfiler.Drain();
+					gpuProfiler.Drain(frameIndex - FramesInFlight);
 				}
 
 				if (resizePending)
@@ -347,7 +456,7 @@ namespace LowLevelFormsSample
 				CommandBuffer commandBuffer;
 				using (var recordZone = Profiler.BeginZone("RecordCommands", TracyColor.Orange))
 				{
-					commandBuffer = RecordCommands(cubeCount);
+					commandBuffer = RecordCommands(cubeCount, slot);
 
 					// The zones RecordCommands opened have all closed by now, so this one is
 					// innermost again and the recolor lands on it. This is the difference the
@@ -361,19 +470,12 @@ namespace LowLevelFormsSample
 
 				recordMs = SectionTimer.Elapsed.TotalMilliseconds;
 
-				SectionTimer.Restart();
+				// The GPU zone recorded above starts executing no earlier than this call, which is
+				// what the alignment check in the README compares the GPU track against.
 				using (Profiler.BeginZone("Submit", TracyColor.Chocolate))
 				{
-					commandQueue.Submit();
+					commandQueue.Submit(frameFence);
 				}
-
-				using (Profiler.BeginZone("WaitIdle", TracyColor.SteelBlue))
-				{
-					SectionTimer.Restart();
-					commandQueue.WaitIdle();
-				}
-
-				submitMs = SectionTimer.Elapsed.TotalMilliseconds;
 
 				SectionTimer.Restart();
 				using (Profiler.BeginZone("Present", TracyColor.CadetBlue))
@@ -395,6 +497,7 @@ namespace LowLevelFormsSample
 			// is: a plot that disagrees with the width of its zone means the capture is wrong.
 			Profiler.Plot("draw calls", cubeCount);
 			Profiler.Plot("record ms", recordMs);
+			Profiler.Plot("fence wait ms", blockedMs);
 			Profiler.Plot("gpu ms", gpuProfiler.LastFrameMilliseconds);
 
 			// Colored, and at most one a second. The message log is where you go to find the
@@ -429,19 +532,22 @@ namespace LowLevelFormsSample
 
 			// Outside the Frame zone and after the present: this is where the frame actually ends.
 			Profiler.FrameMark();
+			frameIndex++;
 		}
 
 		/// <summary>
 		/// Builds the command list for the frame. Every cube costs one dynamic-offset binding plus
 		/// one indexed draw — the smallest honest unit of per-object recording work.
 		/// </summary>
-		private static CommandBuffer RecordCommands(int cubeCount)
+		private static CommandBuffer RecordCommands(int cubeCount, int slot)
 		{
+			Buffer constantBuffer = constantBuffers[slot];
+
 			CommandBuffer commandBuffer = commandQueue.CommandBuffer();
 			commandBuffer.Begin();
 
-			// Outside the render pass on purpose: WriteTimestamp expands to EndQuery plus
-			// ResolveQueryData, and resolving inside a render pass is not allowed.
+			// Outside the render pass on purpose: on DirectX 12 WriteTimestamp expands to EndQuery
+			// plus ResolveQueryData, and resolving inside a render pass is not allowed.
 			GpuZone gpuFrameZone = gpuProfiler.BeginZone(commandBuffer, "GPU frame", TracyColor.DarkTurquoise);
 
 			using (Profiler.BeginZone("UploadConstants", TracyColor.Sienna))
@@ -474,14 +580,14 @@ namespace LowLevelFormsSample
 				for (int i = 0; i < cubeCount; i++)
 				{
 					dynamicOffsets[0] = (uint)i * CbSlotSize;
-					commandBuffer.SetResourceSet(resourceSet, 0, dynamicOffsets);
+					commandBuffer.SetResourceSet(resourceSets[slot], 0, dynamicOffsets);
 					commandBuffer.DrawIndexed(indexCount);
 				}
 			}
 
 			commandBuffer.EndRenderPass();
 
-			gpuProfiler.EndZone(commandBuffer, gpuFrameZone);
+			gpuProfiler.EndZone(commandBuffer, gpuFrameZone, frameIndex);
 
 			commandBuffer.End();
 			commandBuffer.Commit();
@@ -574,6 +680,10 @@ namespace LowLevelFormsSample
 		{
 			resizePending = false;
 
+			// The swap chain images may still be in use by the frames in flight; resizing them
+			// under the GPU is the one thing the fences cannot protect against.
+			commandQueue.WaitIdle();
+
 			uint width = (uint)Math.Max(form.RenderControl.ClientSize.Width, 1);
 			uint height = (uint)Math.Max(form.RenderControl.ClientSize.Height, 1);
 
@@ -614,7 +724,7 @@ namespace LowLevelFormsSample
 			}
 
 			double fps = hudFrames / hudTimer;
-			form.SetTimings(recordMs, submitMs, presentMs, gpuProfiler.LastFrameMilliseconds, fps);
+			form.SetTimings(recordMs, blockedMs, presentMs, gpuProfiler.LastFrameMilliseconds, fps);
 			form.SetTracyConnected(Profiler.IsConnected);
 
 			hudTimer = 0;
