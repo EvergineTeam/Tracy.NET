@@ -135,11 +135,14 @@ abstracts those over every backend:
 | a timestamp per zone edge | `CommandBuffer.WriteTimestamp(heap, index)` |
 | the results after the frame | `QueryHeap.ReadData(start, count, results)` |
 | ns per GPU tick | `1e9f / graphicsContext.TimestampFrequency` |
+| a GPU/CPU clock pair, same instant | `CommandQueue.GetClockCalibration(out gpu, out cpu)` |
 
 ```csharp
-// startup: one raw timestamp + the tick period define the context
+// startup: a simultaneous GPU/CPU pair anchors a calibrated context. Create runs right
+// after the sample — Tracy stamps the CPU side itself, as "now".
+commandQueue.GetClockCalibration(out ulong gpuNow, out long cpuNow);
 var gpu = GpuProfilerContext.Create("frame GPU", TracyGpuContextType.Direct3D12,
-    initialGpuTimestamp, 1e9f / graphicsContext.TimestampFrequency, queryCapacity: 64);
+    (long)gpuNow, 1e9f / graphicsContext.TimestampFrequency, queryCapacity: 64, calibrated: true);
 
 // record time: reserve two query ids, write real timestamps against them
 var zone = gpu.BeginZone("shadow pass");
@@ -148,55 +151,115 @@ commandBuffer.WriteTimestamp(queryHeap, zone.BeginQueryId);
 commandBuffer.WriteTimestamp(queryHeap, zone.EndQueryId);
 zone.End();
 
-// after readback: heap slots map 1:1 to query ids when capacities match
+// after the frame's fence: heap slots map 1:1 to query ids when capacities match
+queryHeap.ReadData(zone.BeginQueryId, 2, results);
 gpu.SubmitTime(zone.BeginQueryId, (long)results[zone.BeginQueryId]);
 gpu.SubmitTime(zone.EndQueryId, (long)results[zone.EndQueryId]);
+
+// every few hundred frames: a fresh pair, and how far the CPU clock moved since the last one
+commandQueue.GetClockCalibration(out gpuNow, out long cpu);
+gpu.Calibrate((long)gpuNow, cpuDeltaNs: (long)((cpu - previousCpu) * 1e9 / Stopwatch.Frequency));
 ```
 
-Size the query heap with the same capacity as the context and drain (`SubmitTime`) at
-least as fast as you emit — the ids are ring indices and wrap. `ReadData` returning false
-means "not ready yet": retry next frame rather than discard. Contexts are uncalibrated
-(the low-level layer exposes no CPU-GPU clock correlation), so call `TimeSync` with a
-fresh raw timestamp every few hundred frames to keep the track anchored — the same scheme
-Tracy's own OpenGL helper uses.
+Size the query heap with the same capacity as the context — an even one — and drain
+(`SubmitTime`) at least as fast as you emit: the ids are ring indices and wrap. Pairs are
+aligned to even ids, so a zone's two slots are adjacent and one `ReadData(begin, 2, ...)`
+covers both; `results` has to be as long as the heap, because every backend writes query
+`i` at `results[i]`. Read a zone only once its frame's fence has been waited on: `ReadData`
+returning false means "not ready yet" on Vulkan and OpenGL, and DirectX 12 returns true
+unconditionally, so the fence is the guarantee, not the return value. Vulkan also resets a
+slot as it is read, which is what lets the ring reuse it.
+
+Two schemes keep the GPU track on the CPU timeline:
+
+- **Calibrated** (`calibrated: true`, DirectX 12, Vulkan and desktop OpenGL in Evergine):
+  the context is anchored on a pair sampled at the same instant by the driver, and
+  `Calibrate` re-anchors it with a fresh pair every few hundred frames. The viewer maps
+  every GPU timestamp through the pair and the measured ratio of both clocks, so the
+  track stays put however far the GPU runs behind the CPU. The CPU delta handed to
+  `Calibrate` is in nanoseconds and comes from the same clock as the pair — with Evergine,
+  `Stopwatch` ticks scaled by `1e9 / Stopwatch.Frequency`.
+- **Uncalibrated** (the default, and the only option where `IsClockCalibrationSupported`
+  is false): the context is anchored once, on a timestamp read back after a
+  `Submit`/`WaitIdle`, and `TimeSync` can re-anchor it — but only with a GPU timestamp
+  that is current at the moment of the call, since Tracy stamps the CPU side as "now". A
+  timestamp read back from an earlier frame shifts the whole track by the age of that
+  frame, which on a frames-in-flight loop is a frame or more. The sample therefore never
+  re-syncs in this mode and reports the width of the anchor window instead.
 
 ## Samples
 
-`LowLevelFormsSample` is a Windows Forms window drawing N cubes through a DirectX 12 swap chain on
-Evergine's low-level graphics API, instrumented end to end. It is where the GPU layer above
-meets an actual GPU — the smoke test drives it with a synthetic clock, which cannot catch a
-mistake in how timestamps are collected.
+`LowLevelFormsSample` is a Windows Forms window drawing N cubes through a DirectX 12 or Vulkan
+swap chain on Evergine's low-level graphics API, with three frames in flight synchronised by
+fences and vsync off, instrumented end to end. It is where the GPU layer above meets an actual
+GPU — the smoke test drives it with a synthetic clock, which cannot catch a mistake in how
+timestamps are collected, nor whether the GPU track lands where it should.
 
 ```bash
-dotnet run --project LowLevelFormsSample -c Release
+dotnet run --project LowLevelFormsSample -c Release -- --backend vulkan
 ```
+
+`--backend dx12|vulkan` picks the API (default `dx12`), `--no-calibration` forces the
+uncalibrated scheme where the backend could calibrate, so both can be captured on the same
+machine and compared, and `--validation` enables the graphics debug layers. Vulkan gets the
+same HLSL compiled to SPIR-V at startup through DXC, because Evergine's Vulkan backend takes
+bytecode only. The sample needs an Evergine with `Fence` and
+`CommandQueue.GetClockCalibration`; see [Development](#development) for building it against
+the Engine sources until those ship in a package.
 
 The cube count is a slider because the thing being measured is how long a frame spends
 *recording* its command buffer: more cubes is more draw calls and no other change, so the
 `RecordCommands` zone has to move with it. `--cubes N` sets the starting count, which makes the
-same comparison repeatable without touching the window. Measured on one machine, per draw call:
+same comparison repeatable without touching the window. Measured on one machine, per draw call,
+with the debug layers off (`--validation` turns them on; with them a draw costs about 10 µs
+to record, which is the debug layer's cost and not the engine's):
 
-| cubes | `RecordCommands` mean | `DrawCalls` mean | per draw |
-|---|---|---|---|
-| 128 | 280 µs | 244 µs | 1.91 µs |
-| 4096 | 8.09 ms | 7.99 ms | 1.95 µs |
+| backend | cubes | `RecordCommands` mean | `DrawCalls` mean | per draw |
+|---|---|---|---|---|
+| DirectX 12 | 512 | 42.7 µs | 20.6 µs | 40 ns |
+| DirectX 12 | 4096 | 187.8 µs | 141.3 µs | 34 ns |
+| Vulkan | 512 | 38.6 µs | 24.2 µs | 47 ns |
+| Vulkan | 4096 | 215.8 µs | 177.3 µs | 43 ns |
 
 What to check once a viewer is attached — the status bar reports the connection, so the app
 tells you without switching windows:
 
-- Zones carry their **names** (`Frame`, `Update`, `RecordCommands`, `DrawCalls`, `Submit`,
-  `Present`) and resolve to `Program.cs`. Anything arriving as `???` means the source-location
-  path broke.
+- Zones carry their **names** (`Frame`, `FenceWait`, `Update`, `RecordCommands`, `DrawCalls`,
+  `Submit`, `Present`) and resolve to `Program.cs`. Anything arriving as `???` means the
+  source-location path broke.
 - `RecordCommands` scales with the slider, and its width agrees with the `record ms` plot and
   the status bar. Three numbers from three paths; they have to match.
 - Every zone carries its own **color**, set at the `BeginZone` call site, and `RecordCommands`
   turns red past its budget while `DrawCalls` renames itself to the cube count — the two
   reactive paths, `zone.Color()` and `zone.Name()`, both driven by the slider. An over-budget
   frame also drops a red line in the **Messages** window, at most one a second.
-- The **GPU** track `DX12 frame` shows one closed zone per frame. Zones left open are
-  timestamps that never arrived.
+- The **GPU** track (`DirectX12 frame` or `Vulkan frame`) shows one closed zone per frame.
+  Zones left open are timestamps that never arrived.
+- Each `GPU frame` zone starts **after the `Submit` zone of the same frame**, never before it
+  and never a whole frame later. With three frames in flight and vsync off the GPU trails the
+  CPU, so a track that merely "looks close" is not evidence; the check that is evidence pairs
+  the two series frame by frame (`tracy-csvexport -u -f Submit` against `tracy-csvexport -g`)
+  and requires `gpuStart - submitStart` to be positive and small. The first message in the
+  **Messages** window says which scheme the run used and how wide the startup anchor window
+  was. Measured on one machine, 8 s captures at ~1000 fps (see the table below).
 - The trace starts before the viewer connected. That history is what `TRACY_ON_DEMAND` being
   off buys, and losing it is a regression.
+
+| run | frames | median `gpuStart - submitStart` | p95 | negatives |
+|---|---|---|---|---|
+| DirectX 12, calibrated, 512 cubes | 55,933 | 0.037 ms | 1.586 ms | 0 |
+| DirectX 12, calibrated, 4096 cubes | 23,344 | 0.044 ms | 0.575 ms | 0 |
+| Vulkan, calibrated, 512 cubes | 50,726 | 0.080 ms | 0.249 ms | 0 |
+| Vulkan, calibrated, 4096 cubes | 19,389 | 0.086 ms | 0.359 ms | 0 |
+| DirectX 12, `--no-calibration`, 512 cubes | 57,032 | 1.198 ms | 2.726 ms | 0 |
+| Vulkan, `--no-calibration`, 512 cubes | 50,987 | 1.690 ms | 1.840 ms | 0 |
+
+The calibrated offset is the GPU's own latency to pick up a submission and does not move
+when the frame gets 2.5x longer, which is what "aligned" means here. The uncalibrated runs
+sit a constant 1.2 ms (DirectX 12) and 1.7 ms (Vulkan) late: the startup anchor window
+those runs reported was 1.9 ms and 3.8 ms wide, and the error is bounded by it, as the
+message says. That constant is the reason the calibrated scheme exists — it is small
+against a 16 ms frame and dwarfs a 0.2 ms one.
 
 The client records from process start and buffers until a viewer connects, so this sample
 accumulates memory if left running unattached.
@@ -233,11 +296,21 @@ requirement, and CI builds by explicit project path.
 dotnet run --project TracyGen/TracyGen.csproj
 ```
 
-### Run the DirectX 12 sample against a viewer
+### Run the low-level sample against a viewer
+
+The sample needs `Fence` and `CommandQueue.GetClockCalibration`, which the pinned Evergine
+packages do not carry yet. Until they do, point `EvergineSourceRoot` at the `src` folder of an
+Engine checkout on a branch that has them and the five Evergine projects build from source
+(the property is also read from the environment variable of the same name):
 
 ```bash
-dotnet run --project LowLevelFormsSample -c Release -- --cubes 4096
+dotnet run --project LowLevelFormsSample -c Release -p:EvergineSourceRoot=C:\repositories\Engine\src -- --backend vulkan --cubes 4096
 ```
+
+Without it the build uses the packages named in `LowLevelFormsSample.csproj`, which is the
+intended configuration once Evergine publishes the API — bump `EvergineVersion` there and
+delete this paragraph. Because of that, `dotnet build Tracy.NET.slnx` needs the property too;
+CI does not build the sample.
 
 ### Build the binding library
 
