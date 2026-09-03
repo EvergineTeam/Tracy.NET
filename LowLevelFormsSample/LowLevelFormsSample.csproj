@@ -41,15 +41,43 @@
 	</ItemGroup>
 
 	<!--
-		Pinned to 2026.5.26.921: the newest stable version that exists for all four packages at
-		once. Evergine.DirectX12 lags the others (there is no DirectX12 build of 2026.5.26.1667),
-		and mismatched Evergine versions do not compose.
+		Two ways to get Evergine, selected by EvergineSourceRoot (an MSBuild property, which
+		also means an environment variable of that name): point it at the `src` folder of an
+		Engine checkout and the five projects are built from source; leave it empty and the
+		published packages are used.
+
+		The sample needs Fence and CommandQueue.GetClockCalibration, which the pinned package
+		version does not have yet — until Evergine publishes them, only the source path builds.
+		Bump EvergineVersion and delete this sentence when it does.
 	-->
-	<ItemGroup>
-		<PackageReference Include="Evergine.Common" Version="2026.5.26.921" />
-		<PackageReference Include="Evergine.Mathematics" Version="2026.5.26.921" />
-		<PackageReference Include="Evergine.DirectX12" Version="2026.5.26.921" />
-		<PackageReference Include="Evergine.Forms" Version="2026.5.26.921" />
+	<PropertyGroup>
+		<UseEvergineSources>false</UseEvergineSources>
+		<UseEvergineSources Condition="'$(EvergineSourceRoot)' != ''">true</UseEvergineSources>
+		<EvergineVersion>2026.5.26.921</EvergineVersion>
+	</PropertyGroup>
+
+	<ItemGroup Condition="$(UseEvergineSources)">
+		<ProjectReference Include="$(EvergineSourceRoot)\Engine\Common\Evergine.Mathematics\Evergine.Mathematics.csproj" />
+		<ProjectReference Include="$(EvergineSourceRoot)\Engine\Common\Evergine.Common\Evergine.Common.csproj" />
+		<ProjectReference Include="$(EvergineSourceRoot)\Engine\Rendering\Evergine.DirectX12\Evergine.DirectX12.csproj" />
+		<ProjectReference Include="$(EvergineSourceRoot)\Engine\Rendering\Evergine.Vulkan\Evergine.Vulkan.csproj" />
+		<ProjectReference Include="$(EvergineSourceRoot)\Engine\WindowSystems\Evergine.Forms\Evergine.Forms.csproj" />
 	</ItemGroup>
+
+	<!--
+		Pinned to one version for all five packages: mismatched Evergine versions do not compose,
+		and Evergine.DirectX12 tends to lag the others by a build.
+	-->
+	<ItemGroup Condition="!$(UseEvergineSources)">
+		<PackageReference Include="Evergine.Common" Version="$(EvergineVersion)" />
+		<PackageReference Include="Evergine.Mathematics" Version="$(EvergineVersion)" />
+		<PackageReference Include="Evergine.DirectX12" Version="$(EvergineVersion)" />
+		<PackageReference Include="Evergine.Vulkan" Version="$(EvergineVersion)" />
+		<PackageReference Include="Evergine.Forms" Version="$(EvergineVersion)" />
+	</ItemGroup>
+
+	<Target Name="CheckEvergineSourceRoot" BeforeTargets="Restore;CollectPackageReferences;Build" Condition="$(UseEvergineSources) And !Exists('$(EvergineSourceRoot)\Engine\Common\Evergine.Common\Evergine.Common.csproj')">
+		<Error Text="EvergineSourceRoot is '$(EvergineSourceRoot)' but '$(EvergineSourceRoot)\Engine\Common\Evergine.Common\Evergine.Common.csproj' does not exist. Point it at the src folder of an Evergine Engine checkout." />
+	</Target>
 
 </Project>
