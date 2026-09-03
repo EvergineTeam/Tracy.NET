@@ -5,4 +5,4 @@
 # Smoke test scratch
 SmokeTest/local-packages/
 SmokeTest/publish/
-Dx12FormsSample/Dx12FormsSample.csproj.user
+LowLevelFormsSample/LowLevelFormsSample.csproj.user
