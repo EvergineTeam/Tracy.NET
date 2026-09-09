@@ -6,8 +6,8 @@ namespace LowLevelFormsSample
 {
 	/// <summary>
 	/// Compiles the sample's HLSL for whichever backend is running. DirectX 12 compiles through
-	/// the graphics context; Evergine's Vulkan backend does not compile at all — it expects SPIR-V
-	/// bytes, which Evergine Studio produces offline — so this class runs the same DXC the DirectX
+	/// the graphics context; Evergine's Vulkan backend does not compile at all (it expects SPIR-V
+	/// bytes, which Evergine Studio produces offline), so this class runs the same DXC the DirectX
 	/// backend uses, with the <c>-spirv</c> target and the register shifts Evergine's Vulkan
 	/// resource layouts assume (b at 0, u at 20, s at 40, t at 60, from the engine's own
 	/// shaderTranslator.ps1 scripts). One HLSL source, two backends, no shader files on disk.

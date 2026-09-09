@@ -4,7 +4,7 @@
 // measurement behind that), so it records from process start and buffers in memory; with no
 // viewer connected nothing touches the network and the run is deterministic in CI.
 //
-// What this cannot verify: that a viewer receives sensible data — and, for the GPU section
+// What this cannot verify: that a viewer receives sensible data, and, for the GPU section
 // below, anything at all about collecting real timestamps, since the clock here is synthetic.
 // LowLevelFormsSample covers both against an actual DirectX 12 device.
 
@@ -97,7 +97,7 @@ for (int frame = 0; frame < 100; frame++)
 	Marshal.FreeHGlobal(scratch);
 
 	// A named pool, and an arena released in one shot: allocation ids here are synthetic, which
-	// Tracy allows — it is how GPU and defragmenting allocators get tracked at all.
+	// Tracy allows: it is how GPU and defragmenting allocators get tracked at all.
 	Profiler.MemAlloc((IntPtr)(0x1000 + frame), 256, "smoke-pool");
 	Profiler.MemFree((IntPtr)(0x1000 + frame), "smoke-pool");
 
@@ -111,7 +111,7 @@ for (int frame = 0; frame < 100; frame++)
 	Profiler.FrameMark();
 }
 
-// The GPU layer, exercised with a synthetic clock — which is exactly what the agnostic
+// The GPU layer, exercised with a synthetic clock, which is exactly what the agnostic
 // design permits: no query heap, no driver, just the emission protocol. A Custom-type
 // context with period 1.0 (one tick = one nanosecond) and a monotonically advancing
 // fake timestamp per zone edge.
@@ -138,7 +138,7 @@ for (int frame = 0; frame < 100; frame++)
 Console.WriteLine("100 synthetic GPU zones emitted through the ring. Exit 0.");
 
 // The calibrated flavour of the same protocol: the context is anchored on a GPU/CPU pair
-// sampled "at the same instant" — here the fake clock against Stopwatch — and re-anchored
+// sampled "at the same instant" (here the fake clock against Stopwatch) and re-anchored
 // with Calibrate, whose CPU delta comes from real Stopwatch ticks scaled to nanoseconds. The
 // first zone pair has to be (0,1): pairs aligned to even ids never straddle the ring wrap.
 long calibratedClock = 1_000_000;

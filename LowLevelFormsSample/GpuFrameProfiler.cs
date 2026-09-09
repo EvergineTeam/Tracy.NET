@@ -9,8 +9,8 @@ namespace LowLevelFormsSample
 {
 	/// <summary>
 	/// Puts real GPU timestamps behind <see cref="GpuProfilerContext"/>. The binding owns the
-	/// emission protocol and deliberately owns nothing else — no query pool, no readback, no
-	/// driver — so this class is the other half of the contract, written against Evergine's
+	/// emission protocol and deliberately owns nothing else, neither query pool nor readback nor
+	/// driver, so this class is the other half of the contract, written against Evergine's
 	/// low-level graphics API exactly as the repository README describes it.
 	///
 	/// The whole design rests on one identity: <see cref="GpuProfilerContext"/> hands out query
@@ -24,13 +24,13 @@ namespace LowLevelFormsSample
 	/// up regardless of how far the GPU runs behind the CPU. Without it the context is anchored
 	/// once, on a timestamp the GPU executed somewhere inside a Submit/WaitIdle window whose
 	/// width bounds the error, and is never re-anchored: the only GPU timestamps available
-	/// later are read back frames after they executed, and handing one of those to TimeSync —
-	/// which stamps the CPU side as "now" — shifts the whole track by the age of that frame.
+	/// later are read back frames after they executed, and handing one of those to TimeSync,
+	/// which stamps the CPU side as "now", shifts the whole track by the age of that frame.
 	/// </summary>
 	internal sealed class GpuFrameProfiler : IDisposable
 	{
 		/// <summary>
-		/// Shared by the Tracy context and the query heap — that is what makes ids and heap slots
+		/// Shared by the Tracy context and the query heap, which is what makes ids and heap slots
 		/// the same number. Two ids per zone, one zone per frame, three frames in flight: six live
 		/// slots against sixty-four. Even, so a zone's begin and end are always adjacent slots
 		/// and one two-slot read covers both.
@@ -87,7 +87,7 @@ namespace LowLevelFormsSample
 		/// <summary>
 		/// Creates the query heap and the Tracy context. Establishing the context needs one raw
 		/// GPU timestamp, so this submits a command buffer that does nothing but write one and
-		/// waits for it — a one-off cost at startup, before any frame exists. When the backend
+		/// waits for it, a one-off cost at startup, before any frame exists. When the backend
 		/// can calibrate, that timestamp is only a fallback and the context is anchored on a
 		/// calibration pair instead, taken immediately before creating it.
 		/// </summary>
@@ -182,7 +182,7 @@ namespace LowLevelFormsSample
 		/// Delivers the timestamps of every zone recorded in a frame the GPU is known to have
 		/// finished, then re-anchors the clocks when due. Call it right after waiting on the
 		/// frame's fence: the fence, not the return value of <c>ReadData</c>, is what makes the
-		/// data safe to read — DirectX 12 reports success unconditionally.
+		/// data safe to read: DirectX 12 reports success unconditionally.
 		/// </summary>
 		/// <param name="completedThroughFrame">The newest frame index whose fence has been waited on.</param>
 		public void Drain(long completedThroughFrame)
@@ -196,7 +196,7 @@ namespace LowLevelFormsSample
 				// One read for both edges: begin is even and end is begin + 1, so they are adjacent
 				// slots, and every backend writes query i at results[i]. Vulkan resets the slots as
 				// it reads them, which is exactly what lets the ring reuse them; it also refuses a
-				// read whose queries have not landed, which the fence rules out — the check is
+				// read whose queries have not landed, which the fence rules out. The check is
 				// insurance, and the zone is kept for another try rather than dropped: a zone
 				// whose timestamps never arrive stays open in the capture forever.
 				if (!this.queryHeap.ReadData(zone.BeginQueryId, 2, this.results))

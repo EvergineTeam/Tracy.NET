@@ -5,7 +5,7 @@ namespace LowLevelFormsSample
 {
 	/// <summary>
 	/// A unit cube built in code: 24 vertices (four per face, so each face carries its own flat
-	/// normal) and 36 indices. Every cube in the scene reuses this one pair of buffers — what
+	/// normal) and 36 indices. Every cube in the scene reuses this one pair of buffers, so what
 	/// varies per draw is the constant buffer offset, which is exactly the per-draw-call cost
 	/// this sample is measuring.
 	/// </summary>

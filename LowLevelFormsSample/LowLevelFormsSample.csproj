@@ -5,7 +5,7 @@
 			net10.0-windows, not the plain net10.0 the rest of the repository uses: Evergine.Forms
 			only ships lib/net10.0-windows7.0 and declares a framework reference on
 			Microsoft.WindowsDesktop.App.WindowsForms. The binding targets plain net10.0, so
-			referencing it from here is fine — the dependency only points one way.
+			referencing it from here is fine: the dependency only points one way.
 		-->
 		<TargetFramework>net10.0-windows</TargetFramework>
 		<OutputType>WinExe</OutputType>
@@ -28,7 +28,7 @@
 	<!--
 		The load-bearing line. The binding project publishes its natives as
 		Content Include="runtimes\**", which through a ProjectReference lands in
-		bin\...\runtimes\win-x64\native\TracyClient.dll — a path nothing probes. Only NuGet
+		bin\...\runtimes\win-x64\native\TracyClient.dll, a path nothing probes. Only NuGet
 		resolves runtimes/<rid>/native, through the deps.json a PackageReference produces.
 		So drop a copy next to the executable, where DllImport("TracyClient") does look;
 		without it the first Profiler call dies with DllNotFoundException.
@@ -44,11 +44,17 @@
 		Two ways to get Evergine, selected by EvergineSourceRoot (an MSBuild property, which
 		also means an environment variable of that name): point it at the `src` folder of an
 		Engine checkout and the five projects are built from source; leave it empty and the
-		published packages are used.
+		packages named by EvergineVersion are used.
 
-		The sample needs Fence and CommandQueue.GetClockCalibration, which the pinned package
-		version does not have yet — until Evergine publishes them, only the source path builds.
-		Bump EvergineVersion and delete this sentence when it does.
+		The sample needs Fence and CommandQueue.GetClockCalibration, which no released package
+		carries yet. Until one does, either build from source or install the packages a pull
+		request build produced and pass that version on the command line:
+
+			-p:EvergineVersion=2026.9.9.1243-pr591
+
+		The pull request version carries the minute of the day, so every CI run produces a new
+		one. That is why it is not pinned here. Bump EvergineVersion and delete these two
+		paragraphs once a released package carries the API.
 	-->
 	<PropertyGroup>
 		<UseEvergineSources>false</UseEvergineSources>

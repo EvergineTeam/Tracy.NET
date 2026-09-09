@@ -7,8 +7,8 @@ namespace Evergine.Bindings.Tracy
 {
 	/// <summary>
 	/// A GPU profiling track, agnostic of the graphics API. The caller owns the timestamp
-	/// queries — with Evergine's low-level layer that means a QueryHeap of type Timestamp,
-	/// CommandBuffer.WriteTimestamp per zone edge, and QueryHeap.ReadData after the frame —
+	/// queries (with Evergine's low-level layer that means a QueryHeap of type Timestamp,
+	/// CommandBuffer.WriteTimestamp per zone edge, and QueryHeap.ReadData after the frame),
 	/// and this class owns the emission protocol: context creation, zone events at record
 	/// time, and the timestamps once they are read back.
 	///
@@ -36,7 +36,7 @@ namespace Evergine.Bindings.Tracy
 
 		// -1, like nextContextId: Interlocked.Increment returns the incremented value, so the
 		// first id handed out is 0 and pairs land on (0,1), (2,3)... Starting at 0 would hand
-		// out (1,2) and eventually (capacity-1, 0) — a pair straddling the ring wrap.
+		// out (1,2) and eventually (capacity-1, 0), a pair straddling the ring wrap.
 		private int nextQueryId = -1;
 		private long lastCalibrationGpuTime;
 
@@ -57,7 +57,7 @@ namespace Evergine.Bindings.Tracy
 		/// <summary>
 		/// Creates an uncalibrated GPU context. <paramref name="initialGpuTimestamp"/> is one raw
 		/// timestamp read from the GPU at startup (write one query, wait, read it back), and
-		/// <paramref name="periodNs"/> converts GPU ticks to nanoseconds — with Evergine's
+		/// <paramref name="periodNs"/> converts GPU ticks to nanoseconds. With Evergine's
 		/// low-level layer, <c>1e9f / graphicsContext.TimestampFrequency</c>.
 		/// </summary>
 		public static GpuProfilerContext Create(
@@ -77,7 +77,7 @@ namespace Evergine.Bindings.Tracy
 		/// Tracy stamps the CPU side of the initial anchor itself, with its own clock, at the
 		/// moment this method runs. For a calibrated context that means
 		/// <paramref name="initialGpuTimestamp"/> must be the GPU half of a pair sampled
-		/// <em>immediately</em> before the call — the CPU half is implied by "now", and every
+		/// <em>immediately</em> before the call: the CPU half is implied by "now", and every
 		/// microsecond between the sample and this call becomes a constant offset of the track.
 		/// <paramref name="queryCapacity"/> has to be even so begin/end pairs never straddle
 		/// the ring wrap.
@@ -120,7 +120,7 @@ namespace Evergine.Bindings.Tracy
 			{
 				// Verified against TracyProfiler.cpp at v0.14.0: ___tracy_emit_gpu_context_name
 				// copies the buffer (tracy_malloc + memcpy) during the call, so transient
-				// UTF-8 is safe here — unlike frame and plot names, which tracy retains.
+				// UTF-8 is safe here, unlike frame and plot names, which tracy retains.
 				var bytes = Encoding.UTF8.GetBytes(name);
 				fixed (byte* ptr = bytes)
 				{
@@ -154,7 +154,7 @@ namespace Evergine.Bindings.Tracy
 			[CallerMemberName] string member = "")
 		{
 			// The client records continuously (the natives are built without
-			// TRACY_ON_DEMAND — see binding.yml for why), so zones are always emitted and
+			// TRACY_ON_DEMAND, see binding.yml for why), so zones are always emitted and
 			// history from before the viewer connects is preserved. The emitted[] array is
 			// bookkeeping, not gating: it pairs each SubmitTime with exactly one zone edge,
 			// so a stale or duplicated readback cannot send a second time for the same id.
@@ -199,7 +199,7 @@ namespace Evergine.Bindings.Tracy
 
 		/// <summary>
 		/// Delivers one read-back GPU timestamp for a query id previously handed out by
-		/// <see cref="BeginZone"/>. Order does not matter to Tracy; completeness does — a
+		/// <see cref="BeginZone"/>. Order does not matter to Tracy; completeness does, since a
 		/// zone whose two timestamps never arrive stays open in the capture. Times for ids
 		/// whose zone events were not emitted (no server connected at the time) are dropped
 		/// here, so the consumer never needs to track connection state itself.
@@ -224,7 +224,7 @@ namespace Evergine.Bindings.Tracy
 		/// <summary>
 		/// Re-anchors an uncalibrated GPU clock against the CPU timeline. Tracy stamps the CPU
 		/// side as "now", so <paramref name="gpuTime"/> must be a GPU timestamp that is current
-		/// at the moment of the call — a timestamp read back from a previous frame would shift
+		/// at the moment of the call, since a timestamp read back from a previous frame would shift
 		/// the whole track by the age of that frame. No-op on a calibrated context, where the
 		/// server ignores the offset this maintains.
 		/// </summary>
@@ -245,7 +245,7 @@ namespace Evergine.Bindings.Tracy
 		/// <summary>
 		/// Re-anchors a calibrated context on a fresh simultaneous pair. <paramref name="gpuTimestamp"/>
 		/// is the raw GPU half of the pair and <paramref name="cpuDeltaNanoseconds"/> is how far the
-		/// CPU half advanced since the pair the context was created with — or since the previous call —
+		/// CPU half advanced since the pair the context was created with, or since the previous call,
 		/// measured with the clock the pair came from (Evergine: <c>Stopwatch</c> ticks, scaled to
 		/// nanoseconds). Tracy stamps its own CPU clock as "now", so call this immediately after
 		/// sampling the pair; the server derives the ratio of both clocks from the two deltas.
@@ -281,7 +281,7 @@ namespace Evergine.Bindings.Tracy
 		{
 			// A ring, not a counter: ids repeat once the capacity wraps, which is fine as
 			// long as the consumer drains (SubmitTime) faster than it emits. That contract
-			// is the consumer's query-heap size — hence capacity comes from Create. Unsigned
+			// is the consumer's query-heap size, hence capacity comes from Create. Unsigned
 			// before the modulo so a wrapped counter can never produce a negative index.
 			int raw = Interlocked.Increment(ref this.nextQueryId);
 			return (ushort)((uint)raw % this.queryCapacity);

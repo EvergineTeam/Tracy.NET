@@ -8,8 +8,8 @@ namespace LowLevelFormsSample
 	/// <summary>
 	/// A plain Windows Forms window hosting an <see cref="EvergineControl"/>: DirectX 12 or Vulkan
 	/// renders into that control's HWND while the rest of the window stays ordinary WinForms. The two
-	/// controls that matter for profiling are the cube-count slider — moving it changes how many
-	/// draw calls the frame records, which is the whole point of the sample — and the status bar,
+	/// controls that matter for profiling are the cube-count slider (moving it changes how many
+	/// draw calls the frame records, which is the whole point of the sample) and the status bar,
 	/// which reports whether a Tracy viewer is attached without having to look at the viewer.
 	/// </summary>
 	internal sealed class MainForm : Form

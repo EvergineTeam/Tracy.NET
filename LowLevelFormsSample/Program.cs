@@ -55,7 +55,7 @@ namespace LowLevelFormsSample
 
 		/// <summary>
 		/// Upper bound the constant buffer is sized for: 8192 * 256 B = 2 MiB. At that count the
-		/// recording cost is unmistakable — milliseconds, not the microseconds a single draw
+		/// recording cost is unmistakable: milliseconds, not the microseconds a single draw
 		/// would leave buried in the noise.
 		/// </summary>
 		private const int MaxCubes = 8192;
@@ -78,7 +78,7 @@ namespace LowLevelFormsSample
 		private const int ArenaChunkCubes = 512;
 
 		/// <summary>
-		/// Named once so the allocation and the discard cannot drift apart — Tracy identifies a
+		/// Named once so the allocation and the discard cannot drift apart. Tracy identifies a
 		/// pool by pointer, and two spellings would be two pools, one of which never gets freed.
 		/// </summary>
 		private const string ArenaPool = "frame-arena";
@@ -102,7 +102,7 @@ namespace LowLevelFormsSample
 		/// <summary>
 		/// The frame arena: one native block reserved for <see cref="MaxCubes"/> in
 		/// <c>Load</c>, never reallocated. Each frame bumps <see cref="arenaOffset"/> through it
-		/// and releases everything at once with <c>MemDiscard</c> — which is the only way a bump
+		/// and releases everything at once with <c>MemDiscard</c>, which is the only way a bump
 		/// allocator can free, and the reason the reservation can stay a one-off. The command
 		/// buffer copies it into the frame's constant buffer at record time, so reusing it the
 		/// next frame is safe even with frames in flight.
@@ -198,7 +198,7 @@ namespace LowLevelFormsSample
 
 			// Deliberately off. With vsync the frame is pinned to the refresh rate and every
 			// change in recording cost is absorbed by the wait in Present, which is precisely the
-			// signal this sample exists to show — and the GPU track's alignment is only put to the
+			// signal this sample exists to show, and the GPU track's alignment is only put to the
 			// test when the GPU is allowed to run as far behind the CPU as the fences let it.
 			swapChain.VerticalSync = false;
 
@@ -272,7 +272,7 @@ namespace LowLevelFormsSample
 		private static void Load()
 		{
 			// RenderLoop.Run drives the callback from the thread that called it, which is the STA
-			// UI thread — so this is the thread the whole capture is about.
+			// UI thread, so this is the thread the whole capture is about.
 			Profiler.SetThreadName("render (UI)");
 			Profiler.AppInfo($"Tracy.NET {backend} + Windows Forms sample");
 
@@ -311,12 +311,12 @@ namespace LowLevelFormsSample
 
 			// The arena's own reservation, in the default pool: one real native allocation,
 			// freed once when the loop ends. The regions handed out of it every frame are a
-			// different story and live in their own pool — see ArenaAlloc.
+			// different story and live in their own pool, see ArenaAlloc.
 			Profiler.MemAlloc((IntPtr)arena, constantBytes);
 
 			// What the application owns on the device, kept apart from CPU memory. These buffers
 			// live until the process dies, so no free is ever reported and the viewer lists them
-			// as still allocated at exit — which is the truth. Inventing a free to make the books
+			// as still allocated at exit, which is the truth. Inventing a free to make the books
 			// look tidy would end the capture, not clean it.
 			const string gpuPool = "gpu";
 			Profiler.MemAlloc(vertexBuffer.NativePointer, vertexBytes, gpuPool);
@@ -327,7 +327,7 @@ namespace LowLevelFormsSample
 					ShaderStages.Vertex | ShaderStages.Pixel, allowDynamicOffset: true, size: CbSlotSize));
 			var resourceLayout = graphics.Factory.CreateResourceLayout(ref layoutDescription);
 
-			// One constant buffer and one resource set per frame in flight — see FramesInFlight.
+			// One constant buffer and one resource set per frame in flight, see FramesInFlight.
 			constantBuffers = new Buffer[FramesInFlight];
 			resourceSets = new ResourceSet[FramesInFlight];
 			frameFences = new Fence[FramesInFlight];
@@ -346,8 +346,8 @@ namespace LowLevelFormsSample
 				frameFences[i].Name = $"Frame fence {i}";
 			}
 
-			// Tracy's alloc/free model cannot see the managed heap — .NET exposes no hook for
-			// it — so the GC gets plots instead. Configured before the first sample, or the
+			// Tracy's alloc/free model cannot see the managed heap, since .NET exposes no hook
+			// for it, so the GC gets plots instead. Configured before the first sample, or the
 			// viewer draws the byte counts as bare numbers.
 			Profiler.PlotConfig("gc allocated", TracyPlotFormatEnum.TracyPlotFormatMemory, color: TracyColor.MediumPurple);
 			Profiler.PlotConfig("gc gen0", TracyPlotFormatEnum.TracyPlotFormatNumber, step: true, color: TracyColor.Goldenrod);
@@ -526,7 +526,7 @@ namespace LowLevelFormsSample
 			// allocator has. It also makes handing the same addresses out next frame legal:
 			// without the discard that would read as allocating a live address twice, and Tracy
 			// ends the session over it. Draw has no early return, so this always runs after the
-			// allocations it releases — keep it that way.
+			// allocations it releases. Keep it that way.
 			arenaOffset = 0;
 			Profiler.MemDiscard(ArenaPool);
 
@@ -537,7 +537,7 @@ namespace LowLevelFormsSample
 
 		/// <summary>
 		/// Builds the command list for the frame. Every cube costs one dynamic-offset binding plus
-		/// one indexed draw — the smallest honest unit of per-object recording work.
+		/// one indexed draw, the smallest honest unit of per-object recording work.
 		/// </summary>
 		private static CommandBuffer RecordCommands(int cubeCount, int slot)
 		{
@@ -553,7 +553,7 @@ namespace LowLevelFormsSample
 			using (Profiler.BeginZone("UploadConstants", TracyColor.Sienna))
 			{
 				// The arena's regions are contiguous and start at its base, so the whole frame
-				// goes up in one call — and there is nothing to pin, since it was never managed.
+				// goes up in one call, and there is nothing to pin, since it was never managed.
 				commandBuffer.UpdateBufferData(constantBuffer, (IntPtr)arena, (uint)cubeCount * CbSlotSize);
 
 				commandBuffer.Barrier(new Buffer.Barrier(constantBuffer, Buffer.StateFlags.UniformBuffer));
@@ -572,7 +572,7 @@ namespace LowLevelFormsSample
 			using (var drawZone = Profiler.BeginZone("DrawCalls", TracyColor.Tomato))
 			{
 				// Per-instance name, against the call-site name in BeginZone above. Tracy copies
-				// it, so unlike the interned source-location name it can change every frame —
+				// it, so unlike the interned source-location name it can change every frame,
 				// which is what puts the cube count on the zone in the timeline instead of
 				// leaving it in a tooltip.
 				drawZone.Name($"DrawCalls x{cubeCount}");
@@ -619,7 +619,7 @@ namespace LowLevelFormsSample
 
 			// Filled in chunks, each one its own arena region, so the slider moves the *number*
 			// of live allocations in the viewer and not just the total byte count. The chunks
-			// come out contiguous — a bump allocator reset to zero every frame — which is what
+			// come out contiguous (a bump allocator reset to zero every frame), which is what
 			// lets RecordCommands upload all of them with a single pointer.
 			for (int chunkStart = 0; chunkStart < cubeCount; chunkStart += ArenaChunkCubes)
 			{
@@ -652,7 +652,7 @@ namespace LowLevelFormsSample
 		/// <summary>
 		/// Hands out the next region of the frame arena and reports it. No allocator runs here:
 		/// the block came from <c>Load</c> and this is pointer arithmetic, which is exactly why
-		/// the reporting has to be explicit — nothing else could see these regions.
+		/// the reporting has to be explicit: nothing else could see these regions.
 		/// </summary>
 		private static byte* ArenaAlloc(uint size)
 		{

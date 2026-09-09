@@ -25,7 +25,7 @@ namespace LowLevelFormsSample
 
 		/// <summary>
 		/// Samples a new pair. Returns false when the backend refused the sample or the CPU clock did
-		/// not move, in which case nothing should be emitted — the server divides by the deltas.
+		/// not move, in which case nothing should be emitted: the server divides by the deltas.
 		/// </summary>
 		public bool TrySample(out long gpuTimestamp, out long cpuDeltaNanoseconds)
 		{

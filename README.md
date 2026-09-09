@@ -10,15 +10,15 @@ This repository contains low-level bindings for the [Tracy profiler](https://git
 
 Tracy is a real-time, nanosecond-resolution frame profiler. This package binds its C API
 (`TracyC.h`) so a .NET application can be instrumented and inspected live from the
-[Tracy viewer](https://github.com/wolfpld/tracy/releases) — zones, frames, plots, messages
+[Tracy viewer](https://github.com/wolfpld/tracy/releases): zones, frames, plots, messages
 and thread names.
 
 Two layers ship in one package:
 
-- **`Tracy`** (generated) — the raw 79 P/Invokes, byte-for-byte faithful to `TracyC.h`.
+- **`Tracy`** (generated): the raw 79 P/Invokes, byte-for-byte faithful to `TracyC.h`.
   Strings are `byte*` on purpose: Tracy retains several of those pointers and reads them
   later from the profiler thread, so no marshaller may free them behind its back.
-- **`Profiler` / `ProfilerZone`** (hand-written) — the API you actually use. Source
+- **`Profiler` / `ProfilerZone`** (hand-written): the API you actually use. Source
   locations are captured by the compiler (`[CallerFilePath]`/`[CallerLineNumber]`) and
   interned for the process lifetime, reproducing at run time what Tracy's C macros do at
   compile time.
@@ -50,11 +50,11 @@ while (running)
 
 `Profiler.MemAlloc(ptr, size)` and `Profiler.MemFree(ptr)` feed the viewer's memory graph,
 allocation list and memory map. Both take an `IntPtr`, so no `unsafe` is needed at the call
-site, and the value does not have to be a real address — Tracy accepts unique numeric ids,
+site, and the value does not have to be a real address, since Tracy accepts unique numeric ids,
 which is how GPU or defragmenting allocators get tracked at all (the memory map is what you
 give up).
 
-Overloads taking a pool name track a separate pool, listed on its own in the memory window —
+Overloads taking a pool name track a separate pool, listed on its own in the memory window,
 graphics-API memory apart from the general heap. `Profiler.MemDiscard(pool)` releases a whole
 pool at once, which is the only kind of free an arena or bump allocator has.
 
@@ -64,14 +64,14 @@ Profiler.MemAlloc(buffer.NativePointer, sizeInBytes, "gpu");
 
 > **The books must balance.** Tracy *terminates the session* on a free without a matching
 > allocation, on the same address allocated twice without a free in between, or on a double
-> free. The relief Tracy grants to on-demand clients does not apply here — this package's
+> free. The relief Tracy grants to on-demand clients does not apply here: this package's
 > natives are built without `TRACY_ON_DEMAND`, so the accounting must hold from the first event
 > of the process. A capture that dies on its own is nearly always one of those three.
 
 ### Colors
 
 `TracyColor` carries the palette from Tracy's own `TracyColor.hpp`, so a color is picked by
-name rather than by remembering a hexadecimal. It is not a closed set — any RGB value works,
+name rather than by remembering a hexadecimal. It is not a closed set: any RGB value works,
 cast it: `(TracyColor)0x1a2b3c`.
 
 Two things follow from how Tracy defines colors, both of which the API preserves rather than
@@ -83,7 +83,7 @@ papers over:
   `(TracyColor)0x000001`, which is what Tracy's manual recommends.
 - The color and name passed to `BeginZone` belong to the **source location**, shared by every
   hit of that call site. `zone.Color()` and `zone.Name()` apply to **that one hit**, and are
-  only valid while the zone is the innermost open one on the thread — Tracy's zone events form
+  only valid while the zone is the innermost open one on the thread, since Tracy's zone events form
   a stack, so anything emitted after a nested zone opened lands on the nested zone instead.
 
 ## How the native client is built
@@ -91,8 +91,8 @@ papers over:
 The package carries `TracyClient` compiled from the same upstream tag the bindings are
 generated from, with two defines that are part of the contract:
 
-- `TRACY_ENABLE` — without it the API does not exist at all.
-- `TRACY_ON_DEMAND` is **off** — the client records continuously from process start, so
+- `TRACY_ENABLE`: without it the API does not exist at all.
+- `TRACY_ON_DEMAND` is **off**: the client records continuously from process start, so
   connecting the viewer at any point shows the full history. Measured on v0.14.0: the
   on-demand DLL build drops all data a few frames after a server connects, so continuous
   recording is not a preference here, it is the mode that works. The cost: an instrumented
@@ -115,17 +115,17 @@ How each identifier is checked before a release is published, stated rather than
 | | how it is checked |
 |---|---|
 | `win-x64`, `linux-x64`, `linux-arm64`, `osx-arm64` | the package is installed from the real `.nupkg` and a hundred frames of zones, plots, messages and frame marks are emitted through the native library |
-| `win-arm64` | **not executed** — no ARM64 runner in the matrix. The application is published for it and `TracyClient.dll` has to reach the output, so the evidence is the file, not a run |
+| `win-arm64` | **not executed**: no ARM64 runner in the matrix. The application is published for it and `TracyClient.dll` has to reach the output, so the evidence is the file, not a run |
 | `osx-x64` | served by the same universal `osx` dylib as `osx-arm64`; the arm64 half is what gets executed in CI |
 
 What no CI leg can verify: that a viewer receives sensible data. That is a human step in
-the release process — connect Tracy v0.14 to the smoke test binary and watch zones arrive.
+the release process: connect Tracy v0.14 to the smoke test binary and watch zones arrive.
 
 ## GPU zones
 
 The package also ships a graphics-API-agnostic GPU layer: `GpuProfilerContext` and
 `GpuZone` over Tracy's `___tracy_emit_gpu_*_serial` protocol. There is deliberately no
-per-API code — no TracyD3D12, TracyVulkan or TracyWebGPU ports — because the consumer is
+per-API code (no TracyD3D12, TracyVulkan or TracyWebGPU ports), because the consumer is
 expected to own the timestamp queries, and Evergine's low-level graphics layer already
 abstracts those over every backend:
 
@@ -139,7 +139,7 @@ abstracts those over every backend:
 
 ```csharp
 // startup: a simultaneous GPU/CPU pair anchors a calibrated context. Create runs right
-// after the sample — Tracy stamps the CPU side itself, as "now".
+// after the sample: Tracy stamps the CPU side itself, as "now".
 commandQueue.GetClockCalibration(out ulong gpuNow, out long cpuNow);
 var gpu = GpuProfilerContext.Create("frame GPU", TracyGpuContextType.Direct3D12,
     (long)gpuNow, 1e9f / graphicsContext.TimestampFrequency, queryCapacity: 64, calibrated: true);
@@ -161,7 +161,7 @@ commandQueue.GetClockCalibration(out gpuNow, out long cpu);
 gpu.Calibrate((long)gpuNow, cpuDeltaNs: (long)((cpu - previousCpu) * 1e9 / Stopwatch.Frequency));
 ```
 
-Size the query heap with the same capacity as the context — an even one — and drain
+Size the query heap with the same capacity as the context (an even one) and drain
 (`SubmitTime`) at least as fast as you emit: the ids are ring indices and wrap. Pairs are
 aligned to even ids, so a zone's two slots are adjacent and one `ReadData(begin, 2, ...)`
 covers both; `results` has to be as long as the heap, because every backend writes query
@@ -177,11 +177,11 @@ Two schemes keep the GPU track on the CPU timeline:
   `Calibrate` re-anchors it with a fresh pair every few hundred frames. The viewer maps
   every GPU timestamp through the pair and the measured ratio of both clocks, so the
   track stays put however far the GPU runs behind the CPU. The CPU delta handed to
-  `Calibrate` is in nanoseconds and comes from the same clock as the pair — with Evergine,
+  `Calibrate` is in nanoseconds and comes from the same clock as the pair, which with Evergine is
   `Stopwatch` ticks scaled by `1e9 / Stopwatch.Frequency`.
 - **Uncalibrated** (the default, and the only option where `IsClockCalibrationSupported`
   is false): the context is anchored once, on a timestamp read back after a
-  `Submit`/`WaitIdle`, and `TimeSync` can re-anchor it — but only with a GPU timestamp
+  `Submit`/`WaitIdle`, and `TimeSync` can re-anchor it, but only with a GPU timestamp
   that is current at the moment of the call, since Tracy stamps the CPU side as "now". A
   timestamp read back from an earlier frame shifts the whole track by the age of that
   frame, which on a frames-in-flight loop is a frame or more. The sample therefore never
@@ -192,7 +192,7 @@ Two schemes keep the GPU track on the CPU timeline:
 `LowLevelFormsSample` is a Windows Forms window drawing N cubes through a DirectX 12 or Vulkan
 swap chain on Evergine's low-level graphics API, with three frames in flight synchronised by
 fences and vsync off, instrumented end to end. It is where the GPU layer above meets an actual
-GPU — the smoke test drives it with a synthetic clock, which cannot catch a mistake in how
+GPU. The smoke test drives it with a synthetic clock, which cannot catch a mistake in how
 timestamps are collected, nor whether the GPU track lands where it should.
 
 ```bash
@@ -221,7 +221,7 @@ to record, which is the debug layer's cost and not the engine's):
 | Vulkan | 512 | 38.6 µs | 24.2 µs | 47 ns |
 | Vulkan | 4096 | 215.8 µs | 177.3 µs | 43 ns |
 
-What to check once a viewer is attached — the status bar reports the connection, so the app
+What to check once a viewer is attached, since the status bar reports the connection, so the app
 tells you without switching windows:
 
 - Zones carry their **names** (`Frame`, `FenceWait`, `Update`, `RecordCommands`, `DrawCalls`,
@@ -230,7 +230,7 @@ tells you without switching windows:
 - `RecordCommands` scales with the slider, and its width agrees with the `record ms` plot and
   the status bar. Three numbers from three paths; they have to match.
 - Every zone carries its own **color**, set at the `BeginZone` call site, and `RecordCommands`
-  turns red past its budget while `DrawCalls` renames itself to the cube count — the two
+  turns red past its budget while `DrawCalls` renames itself to the cube count: the two
   reactive paths, `zone.Color()` and `zone.Name()`, both driven by the slider. An over-budget
   frame also drops a red line in the **Messages** window, at most one a second.
 - The **GPU** track (`DirectX12 frame` or `Vulkan frame`) shows one closed zone per frame.
@@ -258,7 +258,7 @@ The calibrated offset is the GPU's own latency to pick up a submission and does 
 when the frame gets 2.5x longer, which is what "aligned" means here. The uncalibrated runs
 sit a constant 1.2 ms (DirectX 12) and 1.7 ms (Vulkan) late: the startup anchor window
 those runs reported was 1.9 ms and 3.8 ms wide, and the error is bounded by it, as the
-message says. That constant is the reason the calibrated scheme exists — it is small
+message says. That constant is the reason the calibrated scheme exists: it is small
 against a 16 ms frame and dwarfs a 0.2 ms one.
 
 The client records from process start and buffers until a viewer connects, so this sample
@@ -273,7 +273,7 @@ Locks are roadmap.
 ## Development
 
 `Tracy.NET.slnx` holds all four projects. Building it needs one step first, because `SmokeTest`
-consumes the **package** rather than the project — deliberately, since what it tests is whether
+consumes the **package** rather than the project, deliberately, since what it tests is whether
 the `.nupkg` carries a native per runtime identifier:
 
 ```bash
@@ -287,7 +287,7 @@ global packages folder before consulting any source, so a stale `0.0.1-local` ex
 shadows a fresh one. Delete `~/.nuget/packages/evergine.bindings.tracy/0.0.1-local` when the
 smoke test compiles against an API that no longer matches the source.
 
-Every project also builds standalone by path — the solution is a convenience, not a
+Every project also builds standalone by path: the solution is a convenience, not a
 requirement, and CI builds by explicit project path.
 
 ### Generate bindings locally
@@ -298,19 +298,36 @@ dotnet run --project TracyGen/TracyGen.csproj
 
 ### Run the low-level sample against a viewer
 
-The sample needs `Fence` and `CommandQueue.GetClockCalibration`, which the pinned Evergine
-packages do not carry yet. Until they do, point `EvergineSourceRoot` at the `src` folder of an
-Engine checkout on a branch that has them and the five Evergine projects build from source
+The sample needs `Fence` and `CommandQueue.GetClockCalibration`, which no released Evergine
+package carries yet. There are two ways to get an Evergine that has them, and both are one
+property on the command line.
+
+**From a pull request build**, which needs no Engine checkout. Every pull request on
+EvergineTeam/Engine gets a comment with a link to its build; install those packages into the
+local feed and pass the version:
+
+```powershell
+.\Install-LocalFeed.ps1 -BasePath $env:EvergineLocalFeedPath -ActionUrl <the run url from the comment>
+```
+
+```bash
+dotnet run --project LowLevelFormsSample -c Release -p:EvergineVersion=2026.9.9.1243-pr591 -- --backend vulkan --cubes 4096
+```
+
+Take the version from the run you installed rather than copying the one above: it carries the
+minute of the day, so every CI run produces a different one. `Install-LocalFeed.ps1` lives in
+the `scripts` folder of the Engine repository and needs an interactive console, since it draws
+its own download progress.
+
+**From an Engine checkout**, which is what guarantees the build matches a branch exactly. Point
+`EvergineSourceRoot` at its `src` folder and the five Evergine projects are built from source
 (the property is also read from the environment variable of the same name):
 
 ```bash
 dotnet run --project LowLevelFormsSample -c Release -p:EvergineSourceRoot=C:\repositories\Engine\src -- --backend vulkan --cubes 4096
 ```
 
-Without it the build uses the packages named in `LowLevelFormsSample.csproj`, which is the
-intended configuration once Evergine publishes the API — bump `EvergineVersion` there and
-delete this paragraph. Because of that, `dotnet build Tracy.NET.slnx` needs the property too;
-CI does not build the sample.
+Either way, `dotnet build Tracy.NET.slnx` needs the same property; CI does not build the sample.
 
 ### Build the binding library
 
