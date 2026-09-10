@@ -112,11 +112,11 @@ namespace LowLevelFormsSample
 		/// <summary>Number of discrete positions on the logarithmic slider.</summary>
 		private const int SliderSteps = 100;
 
-		public void SetTimings(double recordMs, double blockedMs, double presentMs, double gpuMs, double fps)
+		public void SetTimings(double recordMs, double gpuWaitMs, double presentWaitMs, double gpuMs, double fps)
 		{
 			this.timingsLabel.Text = string.Create(
 				System.Globalization.CultureInfo.InvariantCulture,
-				$"record {recordMs,7:F3} ms   fence wait {blockedMs,6:F2} ms   present {presentMs,5:F2} ms   gpu {gpuMs,6:F2} ms   |   {fps,5:F1} fps");
+				$"record {recordMs,7:F3} ms   gpu wait {gpuWaitMs,6:F2} ms   present wait {presentWaitMs,6:F2} ms   gpu {gpuMs,6:F2} ms   |   {fps,5:F1} fps");
 		}
 
 		/// <summary>

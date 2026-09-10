@@ -31,9 +31,9 @@ namespace LowLevelFormsSample
 	{
 		/// <summary>
 		/// Shared by the Tracy context and the query heap, which is what makes ids and heap slots
-		/// the same number. Two ids per zone, one zone per frame, three frames in flight: six live
-		/// slots against sixty-four. Even, so a zone's begin and end are always adjacent slots
-		/// and one two-slot read covers both.
+		/// the same number. Two ids per zone, one zone per frame, and the frame drains before the
+		/// next one records: two live slots against sixty-four. Even, so a zone's begin and end
+		/// are always adjacent slots and one two-slot read covers both.
 		/// </summary>
 		private const ushort Capacity = 64;
 
@@ -168,8 +168,9 @@ namespace LowLevelFormsSample
 		/// Records the closing timestamp and emits the zone-end event. Call it where the zone ends
 		/// in the command stream, never inside a render pass: on DirectX 12 <c>WriteTimestamp</c>
 		/// expands to <c>EndQuery</c> plus <c>ResolveQueryData</c>, and resolving inside a render
-		/// pass is not allowed. The frame index is what <see cref="Drain"/> later compares against
-		/// the fences to know the timestamps have landed.
+		/// pass is not allowed. The frame index is what <see cref="Drain"/> is later told about,
+		/// so a caller that does pipeline its frames can hold a zone back until its own frame is
+		/// known to be finished.
 		/// </summary>
 		public void EndZone(CommandBuffer commandBuffer, GpuZone zone, long frameIndex)
 		{
@@ -180,11 +181,13 @@ namespace LowLevelFormsSample
 
 		/// <summary>
 		/// Delivers the timestamps of every zone recorded in a frame the GPU is known to have
-		/// finished, then re-anchors the clocks when due. Call it right after waiting on the
-		/// frame's fence: the fence, not the return value of <c>ReadData</c>, is what makes the
-		/// data safe to read: DirectX 12 reports success unconditionally.
+		/// finished, then re-anchors the clocks when due. Call it only once the GPU has actually
+		/// finished that frame, which in the sample means right after <c>CommandQueue.WaitIdle</c>
+		/// and in a pipelined caller would mean right after waiting on the frame's fence. That
+		/// wait, not the return value of <c>ReadData</c>, is what makes the data safe to read:
+		/// DirectX 12 reports success unconditionally.
 		/// </summary>
-		/// <param name="completedThroughFrame">The newest frame index whose fence has been waited on.</param>
+		/// <param name="completedThroughFrame">The newest frame index the GPU is known to have finished.</param>
 		public void Drain(long completedThroughFrame)
 		{
 			bool first = true;
@@ -196,7 +199,7 @@ namespace LowLevelFormsSample
 				// One read for both edges: begin is even and end is begin + 1, so they are adjacent
 				// slots, and every backend writes query i at results[i]. Vulkan resets the slots as
 				// it reads them, which is exactly what lets the ring reuse them; it also refuses a
-				// read whose queries have not landed, which the fence rules out. The check is
+				// read whose queries have not landed, which the drained queue rules out. The check is
 				// insurance, and the zone is kept for another try rather than dropped: a zone
 				// whose timestamps never arrive stays open in the capture forever.
 				if (!this.queryHeap.ReadData(zone.BeginQueryId, 2, this.results))

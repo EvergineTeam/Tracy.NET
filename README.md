@@ -151,7 +151,7 @@ commandBuffer.WriteTimestamp(queryHeap, zone.BeginQueryId);
 commandBuffer.WriteTimestamp(queryHeap, zone.EndQueryId);
 zone.End();
 
-// after the frame's fence: heap slots map 1:1 to query ids when capacities match
+// once the GPU has finished the frame: heap slots map 1:1 to query ids when capacities match
 queryHeap.ReadData(zone.BeginQueryId, 2, results);
 gpu.SubmitTime(zone.BeginQueryId, (long)results[zone.BeginQueryId]);
 gpu.SubmitTime(zone.EndQueryId, (long)results[zone.EndQueryId]);
@@ -165,9 +165,10 @@ Size the query heap with the same capacity as the context (an even one) and drai
 (`SubmitTime`) at least as fast as you emit: the ids are ring indices and wrap. Pairs are
 aligned to even ids, so a zone's two slots are adjacent and one `ReadData(begin, 2, ...)`
 covers both; `results` has to be as long as the heap, because every backend writes query
-`i` at `results[i]`. Read a zone only once its frame's fence has been waited on: `ReadData`
+`i` at `results[i]`. Read a zone only once the GPU has finished the frame that recorded it,
+whether that is a `CommandQueue.WaitIdle` or a wait on the frame's fence: `ReadData`
 returning false means "not ready yet" on Vulkan and OpenGL, and DirectX 12 returns true
-unconditionally, so the fence is the guarantee, not the return value. Vulkan also resets a
+unconditionally, so the wait is the guarantee, not the return value. Vulkan also resets a
 slot as it is read, which is what lets the ring reuse it.
 
 Two schemes keep the GPU track on the CPU timeline:
@@ -190,10 +191,35 @@ Two schemes keep the GPU track on the CPU timeline:
 ## Samples
 
 `LowLevelFormsSample` is a Windows Forms window drawing N cubes through a DirectX 12 or Vulkan
-swap chain on Evergine's low-level graphics API, with three frames in flight synchronised by
-fences and vsync off, instrumented end to end. It is where the GPU layer above meets an actual
-GPU. The smoke test drives it with a synthetic clock, which cannot catch a mistake in how
-timestamps are collected, nor whether the GPU track lands where it should.
+swap chain on Evergine's low-level graphics API, one frame at a time and with vsync on,
+instrumented end to end. It is where the GPU layer above meets an actual GPU. The smoke test
+drives it with a synthetic clock, which cannot catch a mistake in how timestamps are
+collected, nor whether the GPU track lands where it should.
+
+The loop is deliberately serialised: drain the queue, record, `Submit`, then block in
+`CommandQueue.WaitIdle` until the GPU has finished that submission, then read the timestamps
+back and present. There are no fences and nothing is in flight, which costs throughput and
+buys the one property that makes the GPU track checkable by eye: every `GPU frame` zone has
+to sit **inside** the `GpuWait` zone of its own frame, and `GpuWait` is barely wider than it.
+
+The drain at the top of the frame (`PresentWait`) is not redundant. Evergine's swap chain is
+created on the default graphics queue, which is also the queue the sample submits to, so a
+`Present` is queued work on it like a command list. A `Signal` issued after `Submit`
+completes only once everything ahead of it on the queue has, so without a separate drain the
+previous frame's present would be measured as this frame's GPU time.
+
+Vsync is off by default because it does not compose with a serialised loop, and `--vsync`
+exists to show what that looks like rather than to be used. Draining the queue retires the
+present *operation*, but the presentation engine keeps the back buffer until the flip, and
+with nothing in flight there is no frame of work to absorb that back-pressure: it lands in
+front of the next frame's command list, which the driver does not start until the buffer
+comes free. The capture then shows a `GPU frame` zone that is correctly placed, correctly
+sized, and sitting at the far end of a `GpuWait` several milliseconds wide, which is a true
+picture of a useless configuration. Off, both waits collapse to what they are named after
+and `GpuWait` is barely wider than the GPU zone inside it. That is a window the GPU cannot physically leave, so a track
+that drifts, or one anchored a frame late, escapes it visibly instead of merely looking
+plausible. A pipelined loop is what a real renderer does, and it is also what makes a
+misaligned track indistinguishable from a GPU that is simply running behind.
 
 ```bash
 dotnet run --project LowLevelFormsSample -c Release -- --backend vulkan
@@ -201,11 +227,12 @@ dotnet run --project LowLevelFormsSample -c Release -- --backend vulkan
 
 `--backend dx12|vulkan` picks the API (default `dx12`), `--no-calibration` forces the
 uncalibrated scheme where the backend could calibrate, so both can be captured on the same
-machine and compared, and `--validation` enables the graphics debug layers. Vulkan gets the
+machine and compared, `--vsync` turns vertical sync on (off by default, see below), and
+`--validation` enables the graphics debug layers. Vulkan gets the
 same HLSL compiled to SPIR-V at startup through DXC, because Evergine's Vulkan backend takes
-bytecode only. The sample needs an Evergine with `Fence` and
-`CommandQueue.GetClockCalibration`; see [Development](#development) for building it against
-the Engine sources until those ship in a package.
+bytecode only. The sample needs an Evergine with `CommandQueue.GetClockCalibration`; see
+[Development](#development) for building it against the Engine sources until that ships in a
+package.
 
 The cube count is a slider because the thing being measured is how long a frame spends
 *recording* its command buffer: more cubes is more draw calls and no other change, so the
@@ -224,9 +251,9 @@ to record, which is the debug layer's cost and not the engine's):
 What to check once a viewer is attached, since the status bar reports the connection, so the app
 tells you without switching windows:
 
-- Zones carry their **names** (`Frame`, `FenceWait`, `Update`, `RecordCommands`, `DrawCalls`,
-  `Submit`, `Present`) and resolve to `Program.cs`. Anything arriving as `???` means the
-  source-location path broke.
+- Zones carry their **names** (`Frame`, `PresentWait`, `Update`, `RecordCommands`,
+  `DrawCalls`, `Submit`, `GpuWait`, `GpuReadback`, `Present`) and resolve to `Program.cs`.
+  Anything arriving as `???` means the source-location path broke.
 - `RecordCommands` scales with the slider, and its width agrees with the `record ms` plot and
   the status bar. Three numbers from three paths; they have to match.
 - Every zone carries its own **color**, set at the `BeginZone` call site, and `RecordCommands`
@@ -235,15 +262,25 @@ tells you without switching windows:
   frame also drops a red line in the **Messages** window, at most one a second.
 - The **GPU** track (`DirectX12 frame` or `Vulkan frame`) shows one closed zone per frame.
   Zones left open are timestamps that never arrived.
-- Each `GPU frame` zone starts **after the `Submit` zone of the same frame**, never before it
-  and never a whole frame later. With three frames in flight and vsync off the GPU trails the
-  CPU, so a track that merely "looks close" is not evidence; the check that is evidence pairs
-  the two series frame by frame (`tracy-csvexport -u -f Submit` against `tracy-csvexport -g`)
-  and requires `gpuStart - submitStart` to be positive and small. The first message in the
-  **Messages** window says which scheme the run used and how wide the startup anchor window
-  was. Measured on one machine, 8 s captures at ~1000 fps (see the table below).
+- Each `GPU frame` zone falls **entirely inside the `GpuWait` zone of the same frame**, and
+  fills most of it. This is the check the serialised loop exists for and the one worth doing
+  first, because it needs no export and no arithmetic: the GPU cannot start before `Submit`
+  returns nor finish after `WaitIdle` does, so a zone that pokes out of `GpuWait` is a clock
+  problem, not a scheduling one. A zone that sits inside but at the far end of a much wider
+  `GpuWait` is the third case: the queue had something else ahead of the command list, and
+  with vsync that something is the previous frame's flip. Pairing the two series frame by frame (`tracy-csvexport -u -f GpuWait` against
+  `tracy-csvexport -g`) turns the same check into a number: `gpuStart - gpuWaitStart` positive
+  and `gpuEnd - gpuWaitEnd` negative, on every frame. The first message in the **Messages**
+  window says which scheme the run used and how wide the startup anchor window was.
 - The trace starts before the viewer connected. That history is what `TRACY_ON_DEMAND` being
   off buys, and losing it is a regression.
+
+The table below predates the serialised loop: it was measured on the earlier pipelined
+version (three frames in flight, fences, vsync off) and is kept because it is what motivated
+the change. Note the p95 against the median in the DirectX 12 rows: the median is the GPU's
+own latency to pick up a submission, and the p95 is the queue stalling behind a backed-up
+`Present` and then running two frames of work back to back, which is what used to push a GPU
+zone out of its own frame. Numbers for the current loop have not been measured yet.
 
 | run | frames | median `gpuStart - submitStart` | p95 | negatives |
 |---|---|---|---|---|
@@ -298,9 +335,9 @@ dotnet run --project TracyGen/TracyGen.csproj
 
 ### Run the low-level sample against a viewer
 
-The sample needs `Fence` and `CommandQueue.GetClockCalibration`, which no released Evergine
-package carries yet. There are two ways to get an Evergine that has them, and both are one
-property on the command line.
+The sample needs `CommandQueue.GetClockCalibration`, which no released Evergine package
+carries yet. There are two ways to get an Evergine that has it, and both are one property on
+the command line.
 
 **From a pull request build**, which needs no Engine checkout. Every pull request on
 EvergineTeam/Engine gets a comment with a link to its build; install those packages into the

@@ -46,9 +46,9 @@
 		Engine checkout and the five projects are built from source; leave it empty and the
 		packages named by EvergineVersion are used.
 
-		The sample needs Fence and CommandQueue.GetClockCalibration, which no released package
-		carries yet. Until one does, either build from source or install the packages a pull
-		request build produced and pass that version on the command line:
+		The sample needs CommandQueue.GetClockCalibration, which no released package carries
+		yet. Until one does, either build from source or install the packages a pull request
+		build produced and pass that version on the command line:
 
 			-p:EvergineVersion=2026.9.9.1243-pr591
 
